@@ -23,6 +23,17 @@ import org.robolectric.annotation.GraphicsMode
 class LessonWorkspaceTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun reopeningACachedLessonWhileItsRouteLoadsDoesNotReadRepliesFromTheWrongRoot() {
+        val root = listOf("e2e4", "e7e5", "d1h5", "b8c6")
+        val review = MoveReview(5, "h5e5", "Qxe5+", Evaluation(22, cp = 30, pv = listOf("h5f3", "g8f6")),
+            Evaluation(22, cp = -800, pv = listOf("h5e5", "c6e5")), grade = Grade.BLUNDER, explanation = "")
+        val lesson = MoveCoach.explain(root, review)
+        val state = AppState(game = GameRecord(moves = root + review.uci, lessons = listOf(lesson)),
+            ready = true, busy = true, page = 1, cursor = 5, lessonOpen = true, variation = emptyList())
+        compose.setContent { ChessTheme { LessonWorkspace(state, false, {}, {}, {}, {}, {}) } }
+        compose.onNodeWithTag("lesson-board").assertIsDisplayed()
+    }
+
     @Test fun bothRoutesResetToTheSameRootAndShowTheirOwnReplyWithoutChangingTheScore() {
         val root = listOf("e2e4", "e7e5", "d1h5", "b8c6")
         val review = MoveReview(5, "h5e5", "Qxe5+", Evaluation(22, cp = 30, pv = listOf("h5f3", "g8f6")),

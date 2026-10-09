@@ -85,6 +85,7 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
     LaunchedEffect(state.page, state.lessonOpen, state.highlightsOpen) { contentScroll.scrollTo(0) }
     BackHandler(enabled = state.page == 1 && state.lessonOpen, onBack = model::closeLesson)
     BackHandler(enabled = state.page == 1 && state.highlightsOpen, onBack = model::closeHighlights)
+    BackHandler(enabled = state.page == 2 && state.practice != null, onBack = model::closePractice)
     val fen = remember(state.boardHistory) { ChessRules.board(state.boardHistory).fen }
     val legal = remember(state.boardHistory) { ChessRules.legal(state.boardHistory) }
     val targets = remember(selected, legal) { legal.filter { it.take(2) == selected?.let(ChessRules::squareName) }.map { ChessRules.squareIndex(it.substring(2, 4)) }.toSet() }
@@ -108,7 +109,12 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
                 Column(Modifier.widthIn(max = 560.dp).fillMaxSize().padding(horizontal = 16.dp)) {
                     AppHeader(state, model) { aboutDialog = true }
-                    if (state.page == 2) {
+                    if (state.page == 2 && state.practice != null) {
+                        Box(Modifier.weight(1f)) {
+                            PracticeWorkspace(state.practice, model::closePractice, model::practiceAnswer, model::practiceHint,
+                                model::practiceReveal, model::practiceNext, model::practiceExplain)
+                        }
+                    } else if (state.page == 2) {
                         Library(state, model)
                     } else if (state.page == 1 && state.highlightsOpen) {
                         Box(Modifier.weight(1f)) {
@@ -205,6 +211,9 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
                                 }
                             }
                             if (state.page == 1) {
+                                PrimaryAction("整盘深度复评", model::reviewAll, Modifier.fillMaxWidth(),
+                                    state.ready && !state.busy && state.game.moves.isNotEmpty(), ChessIcon.REVIEW)
+                                Text("重新深入分析双方的每一着，更新极速缓存。上方全局复盘只挑选你的关键点。", color = Muted, fontSize = 11.sp)
                                 OutlinedButton(onClick = feedbackClick { context.startActivity(model.share(false)) },
                                     enabled = state.game.moves.isNotEmpty(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                                     LineIcon(ChessIcon.SHARE, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("导出 PGN")
@@ -481,6 +490,7 @@ private fun Library(state: AppState, model: GameViewModel) {
             Text("我的棋谱", style = MaterialTheme.typography.titleLarge)
             Text("${state.games.size} 盘对局 · 保存在这台手机", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
         }
+        item { PracticeCard(state.practiceQuestions, state.practiceProgress, state.ready && !state.busy && !state.transitioning, model::startPractice) }
         item { WeaknessCard(state.weaknesses, model::openWeakness, enabled = state.ready && !state.transitioning) }
         if (state.error != null) item { Text(state.error, color = Danger, fontSize = 13.sp) }
         if (state.games.isEmpty()) item {

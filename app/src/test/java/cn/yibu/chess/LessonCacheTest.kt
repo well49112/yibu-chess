@@ -87,6 +87,15 @@ class LessonCacheTest {
             assertEquals(5, model.state.value.cursor)
             assertEquals(root, model.state.value.boardHistory)
             assertEquals(0, server.requestCount)
+            repeat(3) {
+                model.closeLesson()
+                model.page(2)
+                model.openWeakness(game.id, 5)
+                assertFalse(model.state.value.busy)
+                assertTrue(model.state.value.lessonOpen)
+                assertEquals(listOf("h5f3", "g8f6"), model.state.value.variation)
+                assertEquals(0, model.state.value.variationStep)
+            }
             model.closeLesson()
             model.openWeakness(game.id, 5)
             model.closeLesson()

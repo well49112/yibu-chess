@@ -29,11 +29,11 @@ internal fun LessonWorkspace(
 ) {
     val lesson = state.chosenLesson
     val history = remember(state.game.moves, state.cursor) { state.game.moves.take((state.cursor - 1).coerceAtLeast(0)) }
-    val steps = remember(lesson, history, state.lessonPlayed, state.variation) {
+    val line = remember(history, state.variation) { ChessRules.legalVariation(history, state.variation) }
+    val steps = remember(lesson, history, state.lessonPlayed, line) {
         if (lesson == null) emptyList() else {
-            val safe = ChessRules.legalVariation(history, if (state.lessonPlayed) state.variation else lesson.variation)
             val saved = if (state.lessonPlayed) lesson.playedSteps else lesson.steps
-            if (saved.map(LessonStep::uci) == safe) saved else MoveCoach.annotatedSteps(history, safe)
+            if (saved.map(LessonStep::uci) == line) saved else MoveCoach.annotatedSteps(history, line)
         }
     }
     val fen = remember(state.boardHistory) { ChessRules.board(state.boardHistory).fen }
@@ -56,7 +56,7 @@ internal fun LessonWorkspace(
                         "${if (state.lessonPlayed) "实战后的应对" else "推荐走法"} · 深度 ${lesson.depth}",
                         color = Muted, fontSize = 11.sp)
                 }
-                TextButton(onClick = feedbackClick { onClose() }) { Text("返回复盘", fontSize = 12.sp) }
+                TextButton(onClick = feedbackClick { onClose() }) { Text(if (state.practice != null) "返回练习" else "返回复盘", fontSize = 12.sp) }
                 IconAction(ChessIcon.FLIP, "翻转讲解棋盘", onFlip)
             }
             if (lesson != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -69,7 +69,7 @@ internal fun LessonWorkspace(
                 Box(Modifier.width(boardSize).background(Ink, RoundedCornerShape(14.dp)).padding(4.dp)
                     .testTag("lesson-board")) {
                     ChessBoard(fen, flipped = flipped, selected = null, targets = emptySet(), lastMove = state.boardHistory.lastOrNull(), animationKey = state.game.id,
-                        arrow = state.variation.getOrNull(state.variationStep)) {}
+                        arrow = line.getOrNull(state.variationStep)) {}
                 }
             }
             LazyRow(Modifier.fillMaxWidth().height(36.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -78,7 +78,7 @@ internal fun LessonWorkspace(
                 }
                 itemsIndexed(steps) { index, step ->
                     FilterChip(selected = state.variationStep == index + 1, onClick = feedbackClick { seek(index + 1) },
-                        label = { Text("${index + 1}. ${ChessRules.san(history + state.variation.take(index), step.uci)}", fontSize = 11.sp) })
+                        label = { Text("${index + 1}. ${ChessRules.san(history + line.take(index), step.uci)}", fontSize = 11.sp) })
                 }
             }
             Surface(Modifier.fillMaxWidth().weight(1f), color = Panel, shape = RoundedCornerShape(16.dp)) {

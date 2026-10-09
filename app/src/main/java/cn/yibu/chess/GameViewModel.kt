@@ -10,6 +10,7 @@ import cn.yibu.chess.core.*
 import cn.yibu.chess.audio.ChessSounds
 import cn.yibu.chess.data.GameRepository
 import cn.yibu.chess.data.PlayPreferences
+import cn.yibu.chess.data.PracticePreferences
 import cn.yibu.chess.diagnostics.RuntimeDiagnostics
 import cn.yibu.chess.diagnostics.AnalysisTimings
 import cn.yibu.chess.diagnostics.AnalysisTiming
@@ -48,6 +49,9 @@ data class AppState(
     val variationStep: Int = 0,
     val lessonPlayed: Boolean = false,
     val weaknesses: WeaknessReport = WeaknessReport(),
+    val practiceQuestions: List<PracticeQuestion> = emptyList(),
+    val practiceProgress: Map<String, PracticeProgress> = emptyMap(),
+    val practice: PracticeSession? = null,
     val reviewDone: Int = 0,
     val settings: PlaySettings = PlaySettings(),
     val brilliantNotices: List<MoveReview> = emptyList(),
@@ -72,6 +76,7 @@ data class AppState(
 class GameViewModel @JvmOverloads constructor(application: Application, remoteClient: RemoteStockfishClient? = null) : AndroidViewModel(application) {
     private val repository = GameRepository(application)
     private val preferences = PlayPreferences(application)
+    private val practicePreferences = PracticePreferences(application)
     private val sounds = ChessSounds(application)
     private val stockfishClient = remoteClient ?: RemoteStockfishClient({ mutable.value.settings.stockfishToken })
     private val maia = MaiaModel(application)
@@ -89,8 +94,18 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
 
     init {
         viewModelScope.launch { repository.games.collect { games ->
-            val report = withContext(Dispatchers.Default) { weaknessTracker.build(games) }
-            mutable.update { it.copy(games = games, weaknesses = report) }
+            val (report, questions) = withContext(Dispatchers.Default) {
+                val report = weaknessTracker.build(games)
+                report to MistakePractice.questions(games, report)
+            }
+            val progress = practicePreferences.retainGames(games.map { it.id }.toSet())
+            mutable.update { state ->
+                val current = state.practice?.current
+                val stale = current != null && questions.none { it.key == current.key && it.bestMove == current.bestMove }
+                state.copy(games = games, weaknesses = report, practiceQuestions = questions, practiceProgress = progress,
+                    practice = if (stale) null else state.practice,
+                    error = if (stale) "这道错题已被删除或分析已更新，请重新开始练习。" else state.error)
+            }
         } }
         viewModelScope.launch { repository.profiles.collect { profile ->
             mutable.update { if (profile.ratedGames >= it.profile.ratedGames) it.copy(profile = profile) else it }
@@ -353,7 +368,8 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         if (mutable.value.transitioning) return
         if (page == mutable.value.page) return
         cancelWork()
-        mutable.update { it.copy(page = page, cursor = it.game.moves.size, variation = emptyList(), lessonOpen = false, kingBreak = null, highlightsOpen = false, status = "引擎已就绪") }
+        mutable.update { it.copy(page = page, cursor = it.game.moves.size, variation = emptyList(), lessonOpen = false,
+            practice = null, kingBreak = null, highlightsOpen = false, status = "引擎已就绪") }
         if (page == 0) {
             if (!mutable.value.game.finished && !mutable.value.humanTurn) advance()
             scheduleLiveAnalysis()
@@ -362,7 +378,8 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     fun load(game: GameRecord) {
         if (mutable.value.transitioning) return
         cancelWork()
-        mutable.update { it.copy(game = HumanOpponent.prepare(game), page = 1, cursor = game.moves.size, variation = emptyList(), lessonOpen = false, kingBreak = null, highlightsOpen = false, highlights = emptyList(), brilliantNotices = emptyList(), error = null) }
+        mutable.update { it.copy(game = HumanOpponent.prepare(game), page = 1, cursor = game.moves.size, variation = emptyList(), lessonOpen = false,
+            practice = null, kingBreak = null, highlightsOpen = false, highlights = emptyList(), brilliantNotices = emptyList(), error = null) }
     }
     fun cursor(ply: Int) {
         val before = mutable.value.boardHistory
@@ -450,6 +467,10 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         val review = game.reviews.find { it.ply == ply } ?: return
         load(game)
         cursor(ply)
+        if (mutable.value.chosenLesson?.let { MoveCoach.canReuse(it, review) } == true) {
+            showLessonVariation()
+            return
+        }
         val token = generation
         mutable.update { it.copy(busy = true, lessonOpen = true, explainingPly = ply, lessonPlayed = false, status = "打开已保存的战术讲解…") }
         work = viewModelScope.launch {
@@ -470,7 +491,67 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             finally { if (token == generation) mutable.update { it.copy(busy = false, explainingPly = null) } }
         }
     }
-    fun closeLesson() { mutable.update { it.copy(lessonOpen = false, variation = emptyList(), variationStep = 0) } }
+    fun closeLesson() { mutable.update { it.copy(lessonOpen = false, variation = emptyList(), variationStep = 0,
+        page = if (it.practice != null) 2 else it.page) } }
+    fun startPractice() {
+        val state = mutable.value
+        if (!state.ready || state.busy || state.transitioning || state.practiceQuestions.isEmpty()) return
+        val questions = MistakePractice.queue(state.practiceQuestions, state.practiceProgress, System.currentTimeMillis())
+        cancelWork()
+        mutable.update { it.copy(page = 2, practice = PracticeSession(questions), error = null,
+            lessonOpen = false, highlightsOpen = false, variation = emptyList()) }
+    }
+    fun closePractice() { mutable.update { it.copy(practice = null) } }
+    fun practiceHint() {
+        val session = mutable.value.practice ?: return
+        if (session.current == null || session.finished) return
+        val hints = (session.hints + 1).coerceAtMost(2)
+        mutable.update { it.copy(practice = session.copy(hints = hints, message = "")) }
+    }
+    fun practiceAnswer(uci: String) {
+        val session = mutable.value.practice ?: return
+        val question = session.current ?: return
+        if (session.finished) return
+        if (uci !in ChessRules.legal(question.history)) { playFeedback(SoundCue.ILLEGAL); return }
+        if (uci in question.answers) {
+            val independent = session.hints == 0 && session.wrongAttempts == 0
+            finishPractice(session.copy(solvedMove = uci, message = if (independent) "独立答对了，明天再复习。" else "找到了。用过提示或尝试过其他走法，稍后再练一次。"), independent)
+            reviewSound(question.history, question.history + uci)
+            playFeedback(SoundCue.CONFIRM)
+        } else {
+            val message = if (uci == question.review.uci) "这正是实战走过的失误。${MistakePractice.hint(question, 1)}"
+                else "这着没有匹配已保存的答案，请再找一种走法。其他候选没有重新搜索，不能据此断言这着一定错误。"
+            mutable.update { it.copy(practice = session.copy(wrongAttempts = session.wrongAttempts + 1, message = message)) }
+            playFeedback(SoundCue.ERROR)
+        }
+    }
+    fun practiceReveal() {
+        val session = mutable.value.practice ?: return
+        if (session.current == null || session.finished) return
+        finishPractice(session.copy(revealed = true, message = "已查看答案，本次记为辅助完成，十分钟后再复习。"), independent = false)
+    }
+    private fun finishPractice(session: PracticeSession, independent: Boolean) {
+        val question = session.current ?: return
+        val current = mutable.value
+        val record = MistakePractice.record(question, MistakePractice.effective(question, current.practiceProgress), independent, System.currentTimeMillis())
+        val records = current.practiceProgress + (question.key to record)
+        practicePreferences.save(records)
+        mutable.update { it.copy(practiceProgress = records, practice = session.copy(
+            independent = session.independent + if (independent) 1 else 0,
+            assisted = session.assisted + if (independent) 0 else 1)) }
+    }
+    fun practiceNext() {
+        val session = mutable.value.practice ?: return
+        if (!session.finished) return
+        mutable.update { it.copy(practice = session.next()) }
+    }
+    fun practiceExplain() {
+        val session = mutable.value.practice ?: return
+        if (!session.finished) return
+        val question = session.current ?: return
+        openWeakness(question.gameId, question.ply)
+        mutable.update { it.copy(practice = session) }
+    }
     fun lessonSeek(step: Int) {
         if (!mutable.value.lessonOpen) return
         val before = mutable.value.boardHistory
@@ -507,7 +588,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         if (!mutable.value.ready || mutable.value.busy || mutable.value.page != 1 || mutable.value.game.moves.isEmpty()) return
         val current = mutable.value.game
         val plies = (1..current.moves.size).filter { !guided || (it % 2 == 1) == current.humanWhite }
-        val needsSearch = plies.any { ply ->
+        val needsSearch = !guided || plies.any { ply ->
             current.reviews.find { it.ply == ply }?.canReuseDeep(scoringElo(current, ply), stockfishClient.engineName) != true
         }
         if (needsSearch && mutable.value.settings.stockfishToken.isBlank()) {
@@ -515,14 +596,15 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             return
         }
         val token = generation
-        mutable.update { it.copy(busy = true, reviewDone = 0, error = null, lessonOpen = false, highlightsOpen = false, variation = emptyList(), status = "正在寻找本局关键点…") }
+        mutable.update { it.copy(busy = true, reviewDone = 0, error = null, lessonOpen = false, highlightsOpen = false, variation = emptyList(),
+            status = if (guided) "正在寻找本局关键点…" else "正在逐步深度复评整盘棋…") }
         work = viewModelScope.launch {
             try {
                 val game = mutable.value.game
                 for ((index, ply) in plies.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     val review = mutable.value.game.reviews.find { it.ply == ply }
-                    if (review?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true) analyzePly(ply, true, token)
+                    if (!guided || review?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true) analyzePly(ply, true, token)
                     mutable.update { it.copy(reviewDone = index + 1, status = if (guided)
                         "分析你的棋步 ${index + 1} / ${plies.size}" else "深度复盘 ${index + 1} / ${plies.size}") }
                 }
@@ -536,7 +618,8 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { mutable.update { it.copy(error = "复评失败：${e.message}") } }
-            finally { if (token == generation) mutable.update { it.copy(busy = false, status = "复评已保存") } }
+            finally { if (token == generation) mutable.update { it.copy(busy = false,
+                status = if (it.error != null) "复评未完成，已完成的结果已保存，可重试。" else "复评已保存") } }
         }
     }
     fun pauseReview() { cancelWork(); mutable.update { it.copy(status = "复评已暂停，已完成的结果已保存") } }
