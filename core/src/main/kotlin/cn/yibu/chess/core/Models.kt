@@ -115,6 +115,8 @@ data class MoveLesson(
     val algorithmVersion: Int = 1,
     val steps: List<LessonStep> = emptyList(),
     val playedExplanation: String = "",
+    val playedVariation: List<String> = emptyList(),
+    val playedSteps: List<LessonStep> = emptyList(),
 )
 
 @Serializable

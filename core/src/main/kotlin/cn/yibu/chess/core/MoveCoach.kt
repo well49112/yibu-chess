@@ -9,13 +9,20 @@ import com.github.bhlangonijr.chesslib.move.Move
 
 /** Offline coaching: engine supplies the line; board facts supply the explanation. */
 object MoveCoach {
-    const val ALGORITHM_VERSION = 4
+    const val ALGORITHM_VERSION = 5
     const val MAX_VARIATION_PLIES = 16
 
     fun canReuse(lesson: MoveLesson, review: MoveReview?): Boolean =
         lesson.algorithmVersion == ALGORITHM_VERSION && (review == null ||
             lesson.recommendedMove == review.bestMove && lesson.depth == review.best.depth &&
-                lesson.variation == review.best.pv.take(MAX_VARIATION_PLIES))
+                lesson.variation == review.best.pv.take(MAX_VARIATION_PLIES) &&
+                lesson.playedVariation == review.played.pv.take(MAX_VARIATION_PLIES))
+
+    /** Never substitute the recommended continuation for missing actual-move evidence. */
+    fun playedLine(history: List<String>, review: MoveReview): List<String> =
+        ChessRules.legalVariation(history, review.played.pv.take(MAX_VARIATION_PLIES))
+            .takeIf { it.firstOrNull() == review.uci }
+            ?: ChessRules.legalVariation(history, listOf(review.uci))
 
     fun explain(history: List<String>, review: MoveReview): MoveLesson {
         require(review.ply == history.size + 1)
@@ -39,6 +46,7 @@ object MoveCoach {
             append("\n\n").append(playedExplanation)
         }
         val steps = annotatedSteps(history, line)
+        val playedLine = playedLine(history, review)
         val plan = buildString {
             steps.forEachIndexed { index, step ->
                 append("${index + 1}. ${step.title}。${step.explanation}\n")
@@ -49,7 +57,8 @@ object MoveCoach {
             append("这是引擎主变化的参考路线。对手若改走，先重新检查将军、吃子与直接威胁，不能机械照走。")
         }
         return MoveLesson(review.ply, line.first(), why, plan, line, review.best.depth,
-            algorithmVersion = ALGORITHM_VERSION, steps = steps, playedExplanation = playedExplanation)
+            algorithmVersion = ALGORITHM_VERSION, steps = steps, playedExplanation = playedExplanation,
+            playedVariation = playedLine, playedSteps = annotatedSteps(history, playedLine))
     }
 
     private fun comparison(history: List<String>, review: MoveReview, recommended: List<String>): String {

@@ -46,6 +46,8 @@ data class AppState(
     val variation: List<String> = emptyList(),
     val variationBase: Int = 0,
     val variationStep: Int = 0,
+    val lessonPlayed: Boolean = false,
+    val weaknesses: WeaknessReport = WeaknessReport(),
     val reviewDone: Int = 0,
     val settings: PlaySettings = PlaySettings(),
     val brilliantNotices: List<MoveReview> = emptyList(),
@@ -83,9 +85,13 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     private var generation = 0
     private val persistence = Mutex()
     private val backgroundAttempts = mutableSetOf<Pair<Int, String>>()
+    private val weaknessTracker = WeaknessStats.Tracker()
 
     init {
-        viewModelScope.launch { repository.games.collect { games -> mutable.update { it.copy(games = games) } } }
+        viewModelScope.launch { repository.games.collect { games ->
+            val report = withContext(Dispatchers.Default) { weaknessTracker.build(games) }
+            mutable.update { it.copy(games = games, weaknesses = report) }
+        } }
         viewModelScope.launch { repository.profiles.collect { profile ->
             mutable.update { if (profile.ratedGames >= it.profile.ratedGames) it.copy(profile = profile) else it }
         } }
@@ -390,7 +396,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         val ply = state.cursor
         val gameId = state.game.id
         mutable.update { it.copy(busy = true, explainingPly = ply, lessonOpen = true, variation = emptyList(),
-            variationStep = 0, error = null, status = "深入讲解第 $ply 步…") }
+            variationStep = 0, lessonPlayed = false, error = null, status = "深入讲解第 $ply 步…") }
         work = viewModelScope.launch {
             try {
                 // Updating an old explanation uses its saved engine evidence, without another cloud request.
@@ -423,7 +429,46 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         val lesson = state.chosenLesson ?: return
         val base = lesson.ply - 1
         val safe = ChessRules.legalVariation(state.game.moves.take(base), lesson.variation)
-        mutable.update { it.copy(lessonOpen = true, variation = safe, variationBase = base, variationStep = 0) }
+        mutable.update { it.copy(lessonOpen = true, variation = safe, variationBase = base, variationStep = 0, lessonPlayed = false) }
+    }
+    fun lessonRoute(played: Boolean) {
+        val state = mutable.value
+        if (!state.lessonOpen) return
+        val lesson = state.chosenLesson ?: return
+        val root = state.game.moves.take(state.cursor - 1)
+        val line = if (played) lesson.playedVariation.ifEmpty {
+            state.chosenReview?.let { MoveCoach.playedLine(root, it) }
+                ?: listOf(state.game.moves[state.cursor - 1])
+        } else lesson.variation
+        val safe = ChessRules.legalVariation(root, line)
+        mutable.update { it.copy(lessonPlayed = played, variation = safe, variationBase = state.cursor - 1, variationStep = 0) }
+        reviewSound(state.boardHistory, mutable.value.boardHistory)
+    }
+    fun openWeakness(gameId: Long, ply: Int) {
+        val game = mutable.value.games.find { it.id == gameId } ?: return
+        if (mutable.value.transitioning) return
+        val review = game.reviews.find { it.ply == ply } ?: return
+        load(game)
+        cursor(ply)
+        val token = generation
+        mutable.update { it.copy(busy = true, lessonOpen = true, explainingPly = ply, lessonPlayed = false, status = "打开已保存的战术讲解…") }
+        work = viewModelScope.launch {
+            try {
+                val lesson = withContext(Dispatchers.Default) { MoveCoach.explain(game.moves.take(ply - 1), review) }
+                currentCoroutineContext().ensureActive()
+                if (token != generation || mutable.value.game.id != gameId) return@launch
+                mutable.update {
+                    val open = it.lessonOpen && it.page == 1 && it.cursor == ply
+                    it.copy(game = it.game.copy(lessons = (it.game.lessons.filterNot { note -> note.ply == ply } + lesson).sortedBy { note -> note.ply }),
+                        variation = if (open) lesson.variation else it.variation,
+                        variationBase = if (open) ply - 1 else it.variationBase,
+                        variationStep = if (open) 0 else it.variationStep)
+                }
+                persist(mutable.value.game)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (token == generation) mutable.update { it.copy(error = "已保存讲解暂时无法打开：${e.message}") } }
+            finally { if (token == generation) mutable.update { it.copy(busy = false, explainingPly = null) } }
+        }
     }
     fun closeLesson() { mutable.update { it.copy(lessonOpen = false, variation = emptyList(), variationStep = 0) } }
     fun lessonSeek(step: Int) {

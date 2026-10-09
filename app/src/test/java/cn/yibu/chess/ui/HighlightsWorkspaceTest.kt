@@ -35,6 +35,32 @@ class HighlightsWorkspaceTest {
         compose.onNodeWithText("查看逐步复盘").performClick()
         assertTrue(closed)
     }
+    @Test fun anActualMistakeShowsThePunishingReplyBeforeReturningToTheRecommendedRoot() {
+        val root = listOf("e2e4", "e7e5", "d1h5", "b8c6")
+        val review = MoveReview(5, "h5e5", "Qxe5+", Evaluation(22, cp = 30, pv = listOf("h5f3", "g8f6")),
+            Evaluation(22, cp = -800, pv = listOf("h5e5", "c6e5")), grade = Grade.BLUNDER, explanation = "",
+            provisional = false, algorithmVersion = 3, bestExpectedPoints = .8, playedExpectedPoints = .2)
+        val game = GameRecord(moves = root + review.uci, reviews = listOf(review))
+        val points = GameHighlights.build(game)
+        val sounds = mutableListOf<SoundCue>()
+        compose.setContent { ChessTheme { CompositionLocalProvider(LocalReviewSound provides { before, after ->
+            sounds += SoundEvents.preview(before, after).map { it.cue }
+        }) { HighlightsWorkspace(game, points, false, {}, {}) } } }
+        compose.onNodeWithText("下一步").performClick()
+        compose.onNodeWithText("下一步").performClick()
+        compose.onNodeWithTag("highlight-position").assertTextEquals("实战路线 2 / 2")
+        compose.onNodeWithTag("highlight-explanation").assertTextContains("黑方 Nxe5", substring = true)
+        assertTrue(sounds.contains(SoundCue.CAPTURE))
+        compose.onNodeWithText("下一步").performClick()
+        compose.onNodeWithTag("highlight-position").assertTextEquals("回到起点 · 看推荐走法")
+        compose.onNodeWithText("下一步").performClick()
+        compose.onNodeWithTag("highlight-explanation").assertTextContains("白方 Qf3", substring = true)
+        compose.onNodeWithText("实战线").performClick()
+        compose.onNodeWithTag("highlight-position").assertTextEquals("第 5 步之前")
+        compose.onNodeWithText("推荐线").performClick()
+        compose.onNodeWithTag("highlight-position").assertTextEquals("回到起点 · 看推荐走法")
+        assertEquals(root + review.uci, game.moves)
+    }
     @Test fun tourOnlyChangesAfterManualPressAndSoundsFollowTheSelectedLineOnSmallScreen() {
         val game = GameRecord(moves = listOf("e2e4", "e7e5", "g1f3"))
         fun lesson(ply: Int, line: List<String>): MoveLesson {
@@ -90,7 +116,8 @@ class HighlightsWorkspaceTest {
             advance(6000)
             compose.onNodeWithTag("highlight-position").assertTextEquals("第 3 步之前")
             compose.onNodeWithTag("highlight-title").assertTextContains("2 / 2", substring = true)
-            repeat(4) { compose.onNodeWithText("下一步").performClick(); advance(32) }
+            compose.onNodeWithText("推荐线 · 首着一致").performClick(); advance(32)
+            repeat(2) { compose.onNodeWithText("下一步").performClick(); advance(32) }
             compose.onNodeWithText("完成").performClick()
             advance(32)
             compose.onNodeWithText("复盘完成").assertIsDisplayed()

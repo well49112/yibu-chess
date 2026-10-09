@@ -26,6 +26,14 @@ class ChessScreenTest {
     private val game = EloRules.newGame(PlayerProfile(), humanWhite = true).copy(
         moves = listOf("e2e4", "e7e5"), reviews = listOf(first, second))
 
+    @Test fun reviewKeepsOneWholeGameEntryAndRemovesTheDuplicateDeepButton() {
+        val model = GameViewModel(ApplicationProvider.getApplicationContext())
+        compose.setContent { ChessScreen(AppState(game = game, ready = true, page = 1, cursor = 2), model) }
+        compose.onNodeWithText("全局复盘 · 手动看关键点").assertIsDisplayed()
+        compose.onNodeWithText("整盘深度复评").assertDoesNotExist()
+        compose.onNodeWithText("导出 PGN").performScrollTo().assertIsDisplayed()
+    }
+
     @Test fun ordinaryGradesAndRecommendationsOnlyAppearInReview() {
         val model = GameViewModel(ApplicationProvider.getApplicationContext())
         val state = mutableStateOf(AppState(game = game, ready = true, cursor = 2))

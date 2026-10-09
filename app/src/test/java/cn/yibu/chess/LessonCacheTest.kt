@@ -55,6 +55,17 @@ class LessonCacheTest {
             waitFor(model) { !model.state.value.busy && model.state.value.chosenLesson?.algorithmVersion == MoveCoach.ALGORITHM_VERSION }
             assertTrue(model.state.value.chosenLesson!!.why.contains("没有合法的立即回吃"))
             assertEquals(listOf("h5f3", "g8f6"), model.state.value.variation)
+            assertEquals(listOf("h5e5", "c6e5"), model.state.value.chosenLesson!!.playedVariation)
+            model.lessonRoute(true)
+            assertEquals(root, model.state.value.boardHistory)
+            model.lessonSeek(1)
+            assertEquals(root + "h5e5", model.state.value.boardHistory)
+            model.lessonSeek(2)
+            assertEquals(root + listOf("h5e5", "c6e5"), model.state.value.boardHistory)
+            model.lessonRoute(false)
+            assertEquals(root, model.state.value.boardHistory)
+            assertFalse(model.state.value.lessonPlayed)
+            assertEquals(listOf("h5f3", "g8f6"), model.state.value.variation)
             assertEquals(0, model.state.value.variationStep)
             assertTrue(model.state.value.lessonOpen)
             assertEquals(game.moves, model.state.value.game.moves)
@@ -67,6 +78,23 @@ class LessonCacheTest {
             assertEquals(savedLesson, model.state.value.chosenLesson)
             assertTrue(model.state.value.lessonOpen)
             assertFalse(model.state.value.busy)
+            assertEquals(0, server.requestCount)
+            waitFor(model) { model.state.value.weaknesses.groups.singleOrNull()?.count == 1 }
+            assertEquals(WeaknessType.HANGING_PIECE, model.state.value.weaknesses.groups.single().type)
+            model.page(2)
+            model.openWeakness(game.id, 5)
+            waitFor(model) { !model.state.value.busy && model.state.value.lessonOpen }
+            assertEquals(5, model.state.value.cursor)
+            assertEquals(root, model.state.value.boardHistory)
+            assertEquals(0, server.requestCount)
+            model.closeLesson()
+            model.openWeakness(game.id, 5)
+            model.closeLesson()
+            waitFor(model) { !model.state.value.busy }
+            assertFalse(model.state.value.lessonOpen)
+            assertTrue(model.state.value.variation.isEmpty())
+            model.delete(model.state.value.game)
+            waitFor(model) { !model.state.value.transitioning && model.state.value.games.none { it.id == game.id } && model.state.value.weaknesses.groups.isEmpty() }
             assertEquals(0, server.requestCount)
         } finally { store.clear(); server.shutdown() }
     }

@@ -23,6 +23,50 @@ import org.robolectric.annotation.GraphicsMode
 class LessonWorkspaceTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun bothRoutesResetToTheSameRootAndShowTheirOwnReplyWithoutChangingTheScore() {
+        val root = listOf("e2e4", "e7e5", "d1h5", "b8c6")
+        val review = MoveReview(5, "h5e5", "Qxe5+", Evaluation(22, cp = 30, pv = listOf("h5f3", "g8f6")),
+            Evaluation(22, cp = -800, pv = listOf("h5e5", "c6e5")), grade = Grade.BLUNDER, explanation = "",
+            provisional = false, algorithmVersion = 3)
+        val lesson = MoveCoach.explain(root, review)
+        val game = GameRecord(moves = root + review.uci, reviews = listOf(review), lessons = listOf(lesson))
+        val state = mutableStateOf(AppState(game = game, ready = true, page = 1, cursor = 5, lessonOpen = true,
+            variation = lesson.variation, variationBase = 4))
+        compose.setContent { ChessTheme {
+            Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(70.dp))
+                Box(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                    LessonWorkspace(state.value, false, {}, {}, onSeek = {
+                        state.value = state.value.copy(variationStep = it.coerceIn(0, state.value.variation.size))
+                    }, onRetry = {}, onPause = {}, onRoute = { played ->
+                        state.value = state.value.copy(lessonPlayed = played,
+                            variation = if (played) lesson.playedVariation else lesson.variation, variationStep = 0)
+                    })
+                }
+                Spacer(Modifier.height(80.dp))
+            }
+        } }
+        compose.onNodeWithText("实战线").performClick().assertIsSelected()
+        assertEquals(root, state.value.boardHistory)
+        compose.onNodeWithText("下一步").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("lesson-step-title").assertTextContains("白方 Qxe5+", substring = true)
+        compose.onNodeWithText("下一步").performClick()
+        compose.onNodeWithTag("lesson-step-title").assertTextContains("黑方 Nxe5", substring = true)
+        compose.onNodeWithTag("lesson-step-explanation").assertTextContains("e5的后", substring = true)
+        assertEquals(root + lesson.playedVariation, state.value.boardHistory)
+        compose.onNodeWithText("推荐线").performClick().assertIsSelected()
+        assertEquals(root, state.value.boardHistory)
+        compose.onNodeWithText("下一步").performClick()
+        compose.onNodeWithTag("lesson-step-title").assertTextContains("白方 Qf3", substring = true)
+        compose.onNodeWithText("末尾").performClick()
+        assertEquals(root + lesson.variation, state.value.boardHistory)
+        assertEquals(game, state.value.game)
+        compose.onNodeWithText("实战线").performClick()
+        compose.onNodeWithText("为什么这样走").performClick()
+        compose.onNodeWithTag("lesson-why").assertTextEquals(lesson.playedExplanation)
+        compose.onNodeWithContentDescription("国际象棋棋盘，白方视角").assertIsDisplayed()
+    }
+
     @Test fun legacyLessonKeepsBoardVisibleWhileItsFullTextScrollsAndStepsChange() {
         val root = listOf("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6")
         val line = listOf("e1g1", "f8c5", "d2d3", "d7d6")

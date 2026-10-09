@@ -39,13 +39,22 @@ internal fun HighlightsWorkspace(game: GameRecord, highlights: List<ReviewHighli
         ChessRules.legalVariation(game.moves.take(chosen.ply - 1),
             chosen.lesson?.variation.orEmpty().take(MoveCoach.MAX_VARIATION_PLIES))
     } }
-    fun lastFrame(index: Int): Int = if (lines[index].isEmpty()) 1 else lines[index].size + 2
+    val playedLines = remember(game.moves, highlights) { highlights.map { chosen ->
+        val root = game.moves.take(chosen.ply - 1)
+        val saved = chosen.lesson?.playedVariation.orEmpty()
+        val actual = saved.takeIf { it.firstOrNull() == game.moves[chosen.ply - 1] }
+            ?: game.reviews.find { it.ply == chosen.ply }?.let { MoveCoach.playedLine(root, it) }
+            ?: listOf(game.moves[chosen.ply - 1])
+        ChessRules.legalVariation(root, actual.take(MoveCoach.MAX_VARIATION_PLIES))
+    } }
+    fun recommendedStart(index: Int): Int = playedLines[index].size + 1
+    fun lastFrame(index: Int): Int = recommendedStart(index) + lines[index].size
     fun historyAt(index: Int, stage: Int): List<String> {
         val chosen = highlights[index]
         val root = game.moves.take(chosen.ply - 1)
         return when {
-            stage == 1 -> root + game.moves[chosen.ply - 1]
-            stage >= 3 -> root + lines[index].take(stage - 2)
+            stage in 1..playedLines[index].size -> root + playedLines[index].take(stage)
+            stage > recommendedStart(index) -> root + lines[index].take(stage - recommendedStart(index))
             else -> root
         }
     }
@@ -56,22 +65,30 @@ internal fun HighlightsWorkspace(game: GameRecord, highlights: List<ReviewHighli
     val highlight = highlights[point]
     val root = remember(game.moves, highlight.ply) { game.moves.take(highlight.ply - 1) }
     val line = lines[point]
+    val playedLine = playedLines[point]
+    val recommendedStart = recommendedStart(point)
+    val isPlayed = frame < recommendedStart
     val steps = remember(root, line, highlight.lesson) {
         highlight.lesson?.steps?.takeIf { it.map(LessonStep::uci) == line } ?: MoveCoach.annotatedSteps(root, line)
     }
+    val playedSteps = remember(root, playedLine, highlight.lesson) {
+        highlight.lesson?.playedSteps?.takeIf { it.map(LessonStep::uci) == playedLine }
+            ?: MoveCoach.annotatedSteps(root, playedLine)
+    }
     val history = historyAt(point, frame)
     val fen = remember(history) { ChessRules.board(history).fen }
-    val step = steps.getOrNull(frame - 3)
+    val step = if (isPlayed) playedSteps.getOrNull(frame - 1) else steps.getOrNull(frame - recommendedStart - 1)
     val actor = if (highlight.ply % 2 == 1) "白方" else "黑方"
     val san = remember(game.id, highlight.ply, game.moves) { ChessRules.san(root, game.moves[highlight.ply - 1]) }
     val label = when {
         frame == 0 -> "第 ${highlight.ply} 步之前"
         frame == 1 -> "实战 · $actor $san"
-        frame == 2 -> "回到起点 · 看推荐走法"
-        else -> "推荐路线 ${frame - 2} / ${line.size}"
+        isPlayed -> "实战路线 $frame / ${playedLine.size}"
+        frame == recommendedStart -> "回到起点 · 看推荐走法"
+        else -> "推荐路线 ${frame - recommendedStart} / ${line.size}"
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val boardSize = minOf(maxWidth - 8.dp, maxHeight * .43f, 340.dp).coerceAtLeast(140.dp)
+        val boardSize = minOf(maxWidth - 8.dp, maxHeight * .35f, 340.dp).coerceAtLeast(120.dp)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -87,10 +104,16 @@ internal fun HighlightsWorkspace(game: GameRecord, highlights: List<ReviewHighli
                         modifier = Modifier.weight(1f).height(5.dp), color = Accent, trackColor = Soft)
                 }
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = isPlayed, onClick = feedbackClick { seek(point, 0) }, modifier = Modifier.weight(1f),
+                    label = { Text("实战线", fontSize = 12.sp) })
+                FilterChip(selected = !isPlayed, onClick = feedbackClick { seek(point, recommendedStart) }, modifier = Modifier.weight(1f),
+                    label = { Text(if (line.firstOrNull() == playedLine.firstOrNull()) "推荐线 · 首着一致" else "推荐线", fontSize = 12.sp) })
+            }
             Box(Modifier.align(Alignment.CenterHorizontally).size(boardSize)
                 .background(Ink, RoundedCornerShape(15.dp)).padding(4.dp).testTag("highlight-board")) {
-                ChessBoard(fen, flipped, null, emptySet(), if (frame == 0 || frame == 2) null else history.lastOrNull(),
-                    arrow = if (frame == 2) line.firstOrNull() else null,
+                ChessBoard(fen, flipped, null, emptySet(), if (frame == 0 || frame == recommendedStart) null else history.lastOrNull(),
+                    arrow = if (isPlayed) playedLine.getOrNull(frame) else line.getOrNull(frame - recommendedStart),
                     animationKey = game.id + highlight.ply) {}
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -104,13 +127,14 @@ internal fun HighlightsWorkspace(game: GameRecord, highlights: List<ReviewHighli
                 Text(when {
                     frame == 0 -> highlight.reason
                     frame == 1 -> highlight.lesson?.playedExplanation?.takeIf { it.isNotBlank() } ?: highlight.reason
-                    frame == 2 -> highlight.lesson?.why.orEmpty()
+                    frame == recommendedStart -> highlight.lesson?.why.orEmpty()
                     else -> step?.title.orEmpty()
                 }, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.testTag("highlight-explanation"))
-                if (frame >= 3) Text(step?.explanation.orEmpty(), fontSize = 14.sp, lineHeight = 22.sp)
-                if (frame >= 2) Text(if (frame == lastFrame(point))
+                if (step != null) Text(step.explanation, fontSize = 14.sp, lineHeight = 22.sp)
+                if (isPlayed && playedLine.size <= 1) Text("只展示实际落子；引擎没有合法后续，不用推荐线代替。", color = Muted, fontSize = 11.sp)
+                Text(if (frame == lastFrame(point) || frame == playedLine.size)
                     "本条参考路线到此；搜索结束不等于计划已完成，对手改变走法时需要重新判断。"
-                    else "手动查看每一着及应对；对手改变走法时，需要重新判断。", color = Muted, fontSize = 11.sp)
+                    else "两条路线从同一局面出发；后续是引擎参考应对，并非实际棋谱。", color = Muted, fontSize = 11.sp)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = feedbackClick { seek(point - 1, 0) }, enabled = point > 0) { Text("上个点", fontSize = 12.sp) }

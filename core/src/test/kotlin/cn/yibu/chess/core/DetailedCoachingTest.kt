@@ -144,7 +144,7 @@ class DetailedCoachingTest {
     @Test fun anOldVersionThreeLessonIsRegeneratedFromTheExistingEngineEvidence() {
         val review = review(emptyList(), listOf("e2e4", "e7e5"), listOf("d2d4", "d7d5"))
         val current = MoveCoach.explain(emptyList(), review)
-        assertEquals(4, current.algorithmVersion)
+        assertEquals(MoveCoach.ALGORITHM_VERSION, current.algorithmVersion)
         assertFalse(MoveCoach.canReuse(current.copy(algorithmVersion = 3), review))
         assertTrue(MoveCoach.canReuse(current, review))
     }

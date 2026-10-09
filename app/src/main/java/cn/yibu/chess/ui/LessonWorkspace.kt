@@ -18,25 +18,28 @@ import androidx.compose.ui.unit.sp
 import cn.yibu.chess.AppState
 import cn.yibu.chess.core.ChessRules
 import cn.yibu.chess.core.MoveCoach
+import cn.yibu.chess.core.LessonStep
 
 /** Board and controls stay visible; only the explanation area scrolls. */
 @Composable
 internal fun LessonWorkspace(
     state: AppState, flipped: Boolean, onClose: () -> Unit, onFlip: () -> Unit,
     onSeek: (Int) -> Unit, onRetry: () -> Unit, onPause: () -> Unit,
+    onRoute: (Boolean) -> Unit = {},
 ) {
     val lesson = state.chosenLesson
     val history = remember(state.game.moves, state.cursor) { state.game.moves.take((state.cursor - 1).coerceAtLeast(0)) }
-    val steps = remember(lesson, history) {
+    val steps = remember(lesson, history, state.lessonPlayed, state.variation) {
         if (lesson == null) emptyList() else {
-            val safe = ChessRules.legalVariation(history, lesson.variation)
-            if (lesson.steps.map { it.uci } == safe) lesson.steps else MoveCoach.annotatedSteps(history, safe)
+            val safe = ChessRules.legalVariation(history, if (state.lessonPlayed) state.variation else lesson.variation)
+            val saved = if (state.lessonPlayed) lesson.playedSteps else lesson.steps
+            if (saved.map(LessonStep::uci) == safe) saved else MoveCoach.annotatedSteps(history, safe)
         }
     }
     val fen = remember(state.boardHistory) { ChessRules.board(state.boardHistory).fen }
     var tab by remember(state.game.id, state.cursor) { mutableIntStateOf(0) }
     val notesScroll = rememberScrollState()
-    LaunchedEffect(state.variationStep) {
+    LaunchedEffect(state.variationStep, state.lessonPlayed) {
         tab = if (state.variationStep == 0) 0 else 1
         notesScroll.scrollTo(0)
     }
@@ -44,23 +47,29 @@ internal fun LessonWorkspace(
     fun seek(index: Int) { onSeek(index) }
 
     BoxWithConstraints(Modifier.fillMaxSize().testTag("lesson-workspace")) {
-        val boardSize = minOf(maxWidth - 8.dp, maxHeight * .43f, 340.dp).coerceAtLeast(152.dp)
+        val boardSize = minOf(maxWidth - 8.dp, maxHeight * .35f, 340.dp).coerceAtLeast(140.dp)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("讲解第 ${state.cursor} 步", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     Text(if (lesson == null) "走法原因与后续思路" else
-                        "推荐 ${ChessRules.san(history, lesson.recommendedMove)} · 深度 ${lesson.depth}",
+                        "${if (state.lessonPlayed) "实战后的应对" else "推荐走法"} · 深度 ${lesson.depth}",
                         color = Muted, fontSize = 11.sp)
                 }
                 TextButton(onClick = feedbackClick { onClose() }) { Text("返回复盘", fontSize = 12.sp) }
                 IconAction(ChessIcon.FLIP, "翻转讲解棋盘", onFlip)
             }
+            if (lesson != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = state.lessonPlayed, onClick = feedbackClick { onRoute(true) }, modifier = Modifier.weight(1f),
+                    label = { Text("实战线", fontSize = 12.sp) })
+                FilterChip(selected = !state.lessonPlayed, onClick = feedbackClick { onRoute(false) }, modifier = Modifier.weight(1f),
+                    label = { Text(if (lesson.recommendedMove == state.game.moves.getOrNull(state.cursor - 1)) "推荐线 · 首着一致" else "推荐线", fontSize = 12.sp) })
+            }
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Box(Modifier.width(boardSize).background(Ink, RoundedCornerShape(14.dp)).padding(4.dp)
                     .testTag("lesson-board")) {
                     ChessBoard(fen, flipped = flipped, selected = null, targets = emptySet(), lastMove = state.boardHistory.lastOrNull(), animationKey = state.game.id,
-                        arrow = state.variation.getOrNull((state.variationStep - 1).coerceAtLeast(0))) {}
+                        arrow = state.variation.getOrNull(state.variationStep)) {}
                 }
             }
             LazyRow(Modifier.fillMaxWidth().height(36.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -99,8 +108,12 @@ internal fun LessonWorkspace(
                             }
                         } else when (tab) {
                             0 -> {
-                                Text(lesson.why, modifier = Modifier.testTag("lesson-why"), fontSize = 13.sp, lineHeight = 20.sp)
+                                Text(if (state.lessonPlayed) lesson.playedExplanation else lesson.why,
+                                    modifier = Modifier.testTag("lesson-why"), fontSize = 13.sp, lineHeight = 20.sp)
+                                if (state.lessonPlayed && steps.size <= 1)
+                                    Text("只展示实际落子；引擎未提供合法的后续应对，不能用推荐线代替。", color = Muted, fontSize = 11.sp)
                                 Text("点“下一步”，在棋盘上查看后续应对。", color = Muted, fontSize = 11.sp)
+                                Text("高亮刚走的一着，箭头提示下一着参考应对。", color = Muted, fontSize = 11.sp)
                             }
                             1 -> {
                                 val index = (state.variationStep - 1).coerceAtLeast(0)
@@ -110,13 +123,18 @@ internal fun LessonWorkspace(
                                     Text(step.explanation, modifier = Modifier.testTag("lesson-step-explanation"), fontSize = 13.sp, lineHeight = 20.sp)
                                 }
                                 if (state.variationStep == 0) Text("棋盘是落子前的位置，点“下一步”演示这着棋。", color = Muted, fontSize = 11.sp)
-                                Text(lesson.plan.substringAfterLast('\n'), color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                                Text("${if (state.lessonPlayed) "实战后的引擎应对" else "推荐后的引擎应对"}是参考变化，并非之后实际下出的棋谱。切换路线会回到同一个起点。", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
                             }
                             else -> {
                                 Text("为什么这样走", color = Accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                 Text(lesson.why, modifier = Modifier.testTag("lesson-why"), fontSize = 13.sp, lineHeight = 20.sp)
                                 Text("后续思路", color = Accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                 Text(lesson.plan, modifier = Modifier.testTag("lesson-plan"), fontSize = 13.sp, lineHeight = 20.sp)
+                                Text("实战线与后续应对", color = Accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text(lesson.playedExplanation, fontSize = 13.sp, lineHeight = 20.sp)
+                                lesson.playedSteps.forEachIndexed { index, step ->
+                                    Text("${index + 1}. ${step.title}。${step.explanation}", fontSize = 13.sp, lineHeight = 20.sp)
+                                }
                             }
                         }
                     }

@@ -119,7 +119,8 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
                         Box(Modifier.weight(1f)) {
                             LessonWorkspace(state, !state.game.humanWhite xor flipOverride,
                                 onClose = model::closeLesson, onFlip = { flipOverride = !flipOverride },
-                                onSeek = model::lessonSeek, onRetry = model::explainSelected, onPause = model::pauseReview)
+                                onSeek = model::lessonSeek, onRetry = model::explainSelected, onPause = model::pauseReview,
+                                onRoute = model::lessonRoute)
                         }
                     } else {
                         Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(contentScroll),
@@ -204,13 +205,11 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
                                 }
                             }
                             if (state.page == 1) {
-                                PrimaryAction("整盘深度复评", model::reviewAll, Modifier.fillMaxWidth(),
-                                    state.ready && !state.busy && state.game.moves.isNotEmpty(), ChessIcon.REVIEW)
                                 OutlinedButton(onClick = feedbackClick { context.startActivity(model.share(false)) },
                                     enabled = state.game.moves.isNotEmpty(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                                     LineIcon(ChessIcon.SHARE, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("导出 PGN")
                                 }
-                                Text("讲解只在点击后生成，按步保存。深度复评可能更新推荐与评级。", color = Muted, fontSize = 11.sp)
+                                Text("点击讲解后，可对照实战线与推荐线，按步保存。", color = Muted, fontSize = 11.sp)
                             } else {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     OutlinedButton(onClick = feedbackClick { if (state.game.finished) model.reviewHighlights() else model.page(1) }, enabled = state.game.moves.isNotEmpty() && !state.busy,
@@ -482,6 +481,7 @@ private fun Library(state: AppState, model: GameViewModel) {
             Text("我的棋谱", style = MaterialTheme.typography.titleLarge)
             Text("${state.games.size} 盘对局 · 保存在这台手机", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
         }
+        item { WeaknessCard(state.weaknesses, model::openWeakness, enabled = state.ready && !state.transitioning) }
         if (state.error != null) item { Text(state.error, color = Danger, fontSize = 13.sp) }
         if (state.games.isEmpty()) item {
             Column(Modifier.fillMaxWidth().background(Soft, RoundedCornerShape(20.dp)).padding(horizontal = 24.dp, vertical = 40.dp),
