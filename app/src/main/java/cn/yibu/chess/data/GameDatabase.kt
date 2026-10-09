@@ -34,6 +34,8 @@ interface GameDao {
     @Query("SELECT * FROM games ORDER BY startedAt DESC, id DESC") fun observe(): kotlinx.coroutines.flow.Flow<List<StoredGame>>
     @Query("SELECT * FROM games ORDER BY startedAt DESC, id DESC LIMIT 1") suspend fun latest(): StoredGame?
     @Query("SELECT * FROM games WHERE id = :id") suspend fun find(id: Long): StoredGame?
+    @Query("SELECT * FROM games ORDER BY startedAt DESC, id DESC") suspend fun all(): List<StoredGame>
+    @Query("SELECT id FROM games ORDER BY startedAt DESC, id DESC") fun ids(): kotlinx.coroutines.flow.Flow<List<Long>>
     @Query("DELETE FROM games WHERE id = :id") suspend fun delete(id: Long)
 }
 
@@ -87,6 +89,9 @@ class GameRepository(context: Context, private val database: GameDatabase = Game
         AnalysisTimings.reload(start, rows.size, rows.sumOf { it.payload.length.toLong() })
         decoded
     }
+    val ids = dao.ids()
+    suspend fun all(): List<GameRecord> = dao.all().mapNotNull { runCatching { json.decodeFromString<GameRecord>(it.payload) }.getOrNull() }
+    suspend fun find(id: Long): GameRecord? = dao.find(id)?.let { json.decodeFromString<GameRecord>(it.payload) }
     val profiles = ratings.observeProfile().map { it?.value() ?: PlayerProfile() }
     suspend fun profile(): PlayerProfile = ratings.profile()?.value() ?: PlayerProfile()
     suspend fun latest(): GameRecord? = dao.latest()?.let { runCatching { json.decodeFromString<GameRecord>(it.payload) }.getOrNull() }
@@ -117,7 +122,7 @@ class GameRepository(context: Context, private val database: GameDatabase = Game
         if (ratings.deleted(game.id) != null) return@withTransaction SaveResult(null, profile)
         val previous = dao.find(game.id)?.let { runCatching { json.decodeFromString<GameRecord>(it.payload) }.getOrNull() }
         // A navigation save queued before the last move must not undo a finished game.
-        val snapshot = if (previous != null && ((previous.finished && !game.finished) || previous.moves.size > game.moves.size)) previous else game
+        val snapshot = GameSnapshots.merge(game, previous)
         var change = ratings.rating(game.id)?.value()
         if (change == null && EloRules.eligible(snapshot)) {
             change = EloRules.calculate(profile, requireNotNull(snapshot.opponentElo), requireNotNull(EloRules.score(snapshot)))
@@ -128,6 +133,19 @@ class GameRepository(context: Context, private val database: GameDatabase = Game
         val saved = snapshot.copy(ratingChange = change)
         dao.save(StoredGame(saved.id, saved.startedAt, json.encodeToString(saved)))
         SaveResult(saved, profile)
+    }
+    suspend fun saveReview(expected: GameRecord, review: MoveReview, onlyIfUnchanged: Boolean = true): GameRecord? = database.withTransaction {
+        if (ratings.deleted(expected.id) != null) return@withTransaction null
+        val current = find(expected.id) ?: return@withTransaction null
+        val ply = review.ply
+        if (ply !in 1..current.moves.size || review.uci != current.moves[ply - 1] ||
+            current.moves.take(ply) != expected.moves.take(ply)) return@withTransaction null
+        val previous = current.reviews.find { it.ply == ply }
+        if (onlyIfUnchanged && previous != expected.reviews.find { it.ply == ply }) return@withTransaction current
+        val updated = current.copy(reviews = (current.reviews.filterNot { it.ply == ply } + review).sortedBy { it.ply },
+            lessons = current.lessons.filterNot { it.ply == ply && previous != review })
+        dao.save(StoredGame(updated.id, updated.startedAt, json.encodeToString(updated)))
+        updated
     }
     suspend fun delete(id: Long) = database.withTransaction {
         ratings.markDeleted(DeletedGame(id))

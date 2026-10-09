@@ -515,6 +515,7 @@ private fun Library(state: AppState, model: GameViewModel) {
             }
         }
         item { ChessComImportStatus(state, model::cancelImport, model::clearImportStatus) }
+        if (state.games.any { it.moves.isNotEmpty() }) item { AutoReviewStatus(state.autoReview, model::pauseAutoReview, model::resumeAutoReview) }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(listOf("全部", "Chess.com", "本地对弈", "开局陪练")) { index, label ->
@@ -722,26 +723,9 @@ internal fun NewGameSettingsEditor(
             }
         }
         Spacer(Modifier.height(10.dp))
-        Text("后台搜索预算", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-        Text("对弈时后台静默计算所用的引擎时间预算", fontSize = 11.sp, color = Muted, modifier = Modifier.padding(bottom = 4.dp))
-        AnalysisBudget.entries.forEach { option ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = feedbackClick { onChange(settings.copy(analysisBudget = option)) })
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = settings.analysisBudget == option,
-                    onClick = feedbackClick { onChange(settings.copy(analysisBudget = option)) }
-                )
-                Column {
-                    Text(option.title, fontSize = 14.sp)
-                    Text(option.description, fontSize = 11.sp, color = Muted)
-                }
-            }
-        }
+        Text("自动分析棋谱", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Text("使用极速分析补齐所有棋谱，切到后台后继续，结果逐步保存。手动复盘和最强对手优先处理；可在棋谱页暂停。",
+            fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 4.dp))
         Text("选择与口令会保存在本机；当前对局会保留在棋谱中。", fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
     }
 }

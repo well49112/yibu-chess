@@ -56,6 +56,7 @@ data class MoveReview(
     val brilliantPlan: String? = null,
     val deeplySearched: Boolean = false,
     val analysisProfile: String = "",
+    val analyzedAt: Long = 0,
 ) {
     val pointsLost: Double get() = ((bestExpectedPoints ?: best.expected) - (playedExpectedPoints ?: played.expected)).coerceAtLeast(0.0)
     val bestMove: String get() = best.pv.firstOrNull() ?: uci
@@ -137,6 +138,11 @@ data class MoveLesson(
 
 @Serializable
 data class LessonStep(val uci: String, val title: String, val explanation: String)
+
+internal object ReviewIds {
+    private val last = java.util.concurrent.atomic.AtomicLong()
+    fun next(): Long = last.updateAndGet { maxOf(System.currentTimeMillis(), it + 1) }
+}
 
 private object GameIds {
     private val last = java.util.concurrent.atomic.AtomicLong()

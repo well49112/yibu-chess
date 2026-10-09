@@ -3,29 +3,19 @@ package cn.yibu.chess
 import android.app.Application
 import android.os.Looper
 import androidx.lifecycle.ViewModelStore
-import androidx.test.core.app.ApplicationProvider
+import cn.yibu.chess.background.*
 import cn.yibu.chess.core.*
-import cn.yibu.chess.data.GameDatabase
-import cn.yibu.chess.data.GameRepository
-import cn.yibu.chess.data.PlayPreferences
-import cn.yibu.chess.diagnostics.AnalysisTimings
+import cn.yibu.chess.data.*
 import cn.yibu.chess.engine.RemoteStockfishClient
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
-import org.junit.After
+import okhttp3.mockwebserver.*
+import org.junit.*
 import org.junit.Assert.*
-import org.junit.Before
-import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.Shadows.shadowOf
+import org.robolectric.*
 import org.robolectric.annotation.Config
 import java.time.Duration
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -33,153 +23,73 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class BackgroundAnalysisTest {
-    @Before fun reset() { GameDatabase.resetForTests(); AnalysisTimings.clear() }
-    @After fun close() { GameDatabase.resetForTests() }
-    private fun waitFor(model: GameViewModel, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
-        while (!condition() && System.nanoTime() < deadline) {
-            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20)); Thread.sleep(20)
-        }
-        assertTrue("State did not settle: ${model.state.value.status}, ${model.state.value.error}", condition())
+    @Before fun reset() { GameDatabase.resetForTests(); AutoReview.resetForTests() }
+    @After fun close() { GameDatabase.resetForTests(); AutoReview.resetForTests() }
+    private fun until(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (!condition() && System.nanoTime() < deadline) { Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20)); Thread.sleep(20) }
+        assertTrue("State did not settle", condition())
     }
-    private fun settle() {
-        repeat(20) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20)); Thread.sleep(10) }
-    }
-    private fun response(request: RecordedRequest, comparable: Boolean = true): MockResponse {
-        val payload = Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject
-        val move = payload.getValue("playedMove").jsonPrimitive.content
-        val item = """{"move":"$move","depth":22,"score":{"type":"cp","value":20},"pv":["$move"]}"""
-        return MockResponse().setBody("""{"best":$item,"played":$item,"comparison":{"canCompare":$comparable,"commonDepth":22},"engine":{"name":"Stockfish","version":"19"}}""")
-    }
-
-    @Test fun inFlightReviewSurvivesAnotherHumanAndAiMoveAndTheSavedTourUsesItsCache() {
-        val app = ApplicationProvider.getApplicationContext<Application>()
+    @Test fun independentQueueSurvivesMoreHumanAndMaiaMovesUiBackgroundAndViewModelDestruction() {
+        val app = RuntimeEnvironment.getApplication()
         PlayPreferences(app).save(PlaySettings(color = ColorPreference.WHITE))
-        val release = CountDownLatch(1)
-        val calls = AtomicInteger()
-        val payloads = CopyOnWriteArrayList<JsonObject>()
-        val server = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest): MockResponse {
-                    payloads.add(Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject)
-                    if (calls.incrementAndGet() == 1) check(release.await(25, TimeUnit.SECONDS))
-                    return response(request)
-                }
+        val entered = CountDownLatch(1); val release = CountDownLatch(1); val calls = AtomicInteger()
+        val server = MockWebServer().apply { dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (calls.incrementAndGet() == 1) { entered.countDown(); release.await(15, TimeUnit.SECONDS) }
+                val payload = Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject
+                val move = payload["playedMove"]!!.jsonPrimitive.content
+                val ev = """{"depth":22,"score":{"type":"cp","value":20,"bound":"exact"},"pv":["$move"]}"""
+                return MockResponse().setBody("""{"best":$ev,"played":$ev,"comparison":{"canCompare":true,"commonDepth":22},"engine":{"name":"Stockfish","version":"19"}}""")
             }
-            start()
-        }
-        val model = GameViewModel(app, RemoteStockfishClient({ "test-token" }, server.url("/").toString()))
+        }; start() }
+        val vmClient = RemoteStockfishClient({ "token" }, server.url("/").toString())
+        val queueClient = RemoteStockfishClient({ "token" }, server.url("/").toString())
+        val model = GameViewModel(app, vmClient)
         val store = ViewModelStore().apply { put("background", model) }
+        val repo = GameRepository(app)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var job: Job? = null
         try {
-            waitFor(model) { model.state.value.ready && !model.state.value.busy }
-            val game = GameRecord(moves = listOf("e2e4", "e7e5"), humanWhite = true, playerEloAtStart = 500, opponentElo = 500)
-            model.load(game)
-            model.saveSettings(PlaySettings(color = ColorPreference.WHITE, stockfishToken = "test-token"))
-            model.page(0)
-            waitFor(model) { calls.get() == 1 }
-            assertTrue(model.state.value.analyzing)
-            assertFalse(model.state.value.busy)
+            until { model.state.value.ready && !model.state.value.busy }
+            val game = GameRecord(moves = listOf("e2e4", "e7e5"), playerEloAtStart = 500, opponentElo = 500)
+            runBlocking { repo.save(game) }
+            model.load(game); model.saveSettings(PlaySettings(color = ColorPreference.WHITE, stockfishToken = "token")); model.page(0)
+            val control = object : AutoReviewControl {
+                override val revision get() = AutoReview.revision
+                override fun settings() = PlayPreferences(app).read()
+                override fun online() = true
+                override fun paused() = false
+                override fun interactive() = AutoReview.interactive
+                override fun importing() = false
+                override fun activeGameId() = game.id
+                override fun authFailed(token: String) {}
+                override fun searching(value: Boolean) {}
+                override fun publish(state: AutoReviewState) = AutoReview.publish(state)
+                override suspend fun awaitWake(ms: Long) = AutoReview.awaitWake(ms)
+            }
+            job = scope.launch { AutoReviewRunner(app, repo, queueClient, AutoReviewRetries(app), control, idleGraceMs = 0).run() }
+            until { entered.count == 0L && model.state.value.analyzing }
             model.play("g1f3")
-            waitFor(model) { !model.state.value.busy && model.state.value.game.moves.size == 4 }
-            assertEquals(1, calls.get())
+            until { !model.state.value.busy && model.state.value.game.moves.size == 4 }
             val moves = model.state.value.game.moves
+            model.pauseForBackground() // Cancels the UI client's work, not the queue client's request.
             release.countDown()
-            waitFor(model) { !model.state.value.analyzing && model.state.value.game.reviews.size == 4 }
-            assertNull(model.state.value.error)
+            until { runBlocking { repo.find(game.id)!!.reviews.size } == 4 }
+            until { model.state.value.game.reviews.size == 4 }
             assertEquals(moves, model.state.value.game.moves)
             assertEquals(4, calls.get())
-            assertTrue(model.state.value.game.reviews.all { it.analysisProfile == "lightning" && it.canReuseDeep(500, "Stockfish 19") })
-            for (payload in payloads) {
-                assertEquals("lightning", payload.getValue("profile").jsonPrimitive.content)
-                assertEquals(22, payload.getValue("limits").jsonObject.getValue("depth").jsonPrimitive.int)
-                assertEquals(500, payload.getValue("limits").jsonObject.getValue("maxTimeMs").jsonPrimitive.int)
-            }
-            val saved = runBlocking { GameRepository(app).latest() }!!
-            assertEquals(game.id, saved.id)
-            assertEquals(moves, saved.moves)
-            assertEquals(4, saved.reviews.size)
-            model.load(saved.copy(finished = true, result = "1/2-1/2"))
-            model.reviewHighlights()
-            waitFor(model) { !model.state.value.busy }
-            assertTrue(model.state.value.highlightsOpen)
-            assertEquals(4, calls.get())
-            assertNull(model.state.value.error)
-            model.page(0)
-            settle()
-            assertEquals(4, calls.get())
-            val timings = AnalysisTimings.snapshot().getJSONArray("analysis")
-            assertEquals(4, timings.length())
-            assertTrue((0 until timings.length()).all { timings.getJSONObject(it).getString("profile") == "lightning" })
-        } finally { release.countDown(); store.clear(); server.shutdown() }
-    }
-
-    @Test fun incomparableResultsDoNotCreateAnEndlessBackgroundRetryLoop() {
-        val app = ApplicationProvider.getApplicationContext<Application>()
-        PlayPreferences(app).save(PlaySettings(color = ColorPreference.WHITE))
-        val server = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest) = response(request, comparable = false)
-            }; start()
+            // New historical work still finishes after the screen's owner is destroyed.
+            val imported = game.copy(id = game.id + 20, finished = true)
+            runBlocking { repo.save(imported) }
+            AutoReview.wake()
+            job = scope.launch { AutoReviewRunner(app, repo, queueClient, AutoReviewRetries(app), control, idleGraceMs = 0).run() }
+            store.clear()
+            until { runBlocking { repo.find(imported.id)!!.reviews.size } == 2 }
+            assertEquals(6, calls.get())
+            assertTrue(runBlocking { repo.find(game.id)!!.reviews.all { it.analysisProfile == "lightning" } })
+        } finally {
+            release.countDown(); store.clear(); runBlocking { job?.cancelAndJoin() }; scope.cancel(); queueClient.stop(); server.shutdown()
         }
-        val model = GameViewModel(app, RemoteStockfishClient({ "test-token" }, server.url("/").toString()))
-        val store = ViewModelStore().apply { put("bounded", model) }
-        try {
-            waitFor(model) { model.state.value.ready && !model.state.value.busy }
-            model.load(GameRecord(moves = listOf("e2e4", "e7e5"), finished = true))
-            model.saveSettings(PlaySettings(stockfishToken = "test-token"))
-            model.page(0)
-            waitFor(model) { !model.state.value.analyzing && model.state.value.game.reviews.size == 2 }
-            settle()
-            assertEquals(2, server.requestCount)
-            assertTrue(model.state.value.game.reviews.all { it.grade == Grade.UNSTABLE && it.provisional })
-            assertNull(model.state.value.error)
-        } finally { store.clear(); server.shutdown() }
-    }
-
-    @Test fun switchingToDeepRefreshesLightningCacheWithoutLosingTheGameAndManualReevaluationStaysDeep() {
-        val app = ApplicationProvider.getApplicationContext<Application>()
-        PlayPreferences(app).save(PlaySettings(color = ColorPreference.WHITE))
-        val profiles = CopyOnWriteArrayList<String>()
-        val server = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest): MockResponse {
-                    val payload = Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject
-                    profiles.add(payload.getValue("profile").jsonPrimitive.content)
-                    if (profiles.last() == "deep") assertTrue(payload["limits"] == null || payload["limits"] == JsonNull)
-                    return response(request)
-                }
-            }; start()
-        }
-        val model = GameViewModel(app, RemoteStockfishClient({ "test-token" }, server.url("/").toString()))
-        val store = ViewModelStore().apply { put("budget", model) }
-        try {
-            waitFor(model) { model.state.value.ready && !model.state.value.busy }
-            val game = GameRecord(moves = listOf("e2e4", "e7e5"), finished = true)
-            model.load(game)
-            val settings = PlaySettings(stockfishToken = "test-token")
-            model.saveSettings(settings)
-            model.page(0)
-            waitFor(model) { !model.state.value.analyzing && model.state.value.game.reviews.size == 2 }
-            model.saveSettings(settings.copy(analysisBudget = AnalysisBudget.DEEP))
-            waitFor(model) { !model.state.value.analyzing && model.state.value.game.reviews.all { it.analysisProfile == "deep" } }
-            assertEquals(listOf("lightning", "lightning", "deep", "deep"), profiles.toList())
-            model.saveSettings(settings)
-            settle()
-            assertEquals(4, server.requestCount)
-            assertEquals(game.id, model.state.value.game.id)
-            assertEquals(game.moves, model.state.value.game.moves)
-            model.page(1)
-            model.analyzeSelected()
-            waitFor(model) { !model.state.value.busy && server.requestCount == 5 }
-            assertEquals("deep", profiles.last())
-            assertNull(model.state.value.error)
-        } finally { store.clear(); server.shutdown() }
-    }
-
-    @Test fun lazilyOpenedRoomDatabaseIsStillASingleton() {
-        val app = ApplicationProvider.getApplicationContext<Application>()
-        val first = GameDatabase.get(app)
-        assertFalse(first.isOpen)
-        assertSame(first, GameDatabase.get(app))
     }
 }

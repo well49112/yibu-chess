@@ -73,6 +73,6 @@ class MoveAnalyzer(private val service: StockfishService) {
             engineVersion = analysis.engineName,
             algorithmVersion = 3, scoringElo = playerElo, bestExpectedPoints = bestPoints, playedExpectedPoints = playedPoints,
             brilliantReason = brilliant?.reason, brilliantPlan = brilliant?.plan, deeplySearched = deep,
-            analysisProfile = profileOverride ?: if (deep) "deep" else "fast")
+            analysisProfile = profileOverride ?: if (deep) "deep" else "fast", analyzedAt = ReviewIds.next())
     }
 }

@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.yibu.chess.core.*
 import cn.yibu.chess.audio.ChessSounds
+import cn.yibu.chess.background.*
 import cn.yibu.chess.data.GameRepository
 import cn.yibu.chess.data.PlayPreferences
 import cn.yibu.chess.data.PracticePreferences
@@ -64,6 +65,7 @@ data class AppState(
     val highlightsOpen: Boolean = false,
     val highlights: List<ReviewHighlight> = emptyList(),
     val lastAnalysisTimingId: String? = null,
+    val autoReview: AutoReviewState = AutoReviewState(),
     val chessComUsername: String = "",
     val importing: Boolean = false,
     val importStatus: String = "",
@@ -106,16 +108,18 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         openingProgress = openingPreferences.progress()))
     val state = mutable.asStateFlow()
     private var work: Job? = null
-    private var liveAnalysis: Job? = null
     private var importWork: Job? = null
     private var openingWork: Job? = null
     private var openingGeneration = 0
     private var generation = 0
     private val persistence = Mutex()
-    private val backgroundAttempts = mutableSetOf<Pair<Int, String>>()
     private val weaknessTracker = WeaknessStats.Tracker()
 
     init {
+        viewModelScope.launch { AutoReview.state.collect { auto -> mutable.update { it.copy(autoReview = auto,
+            analyzing = auto.running && auto.gameId == it.game.id && auto.ply > 0) } } }
+        viewModelScope.launch { mutable.collect { state -> AutoReview.interactive(state.busy &&
+            (state.page == 1 || state.game.mode == Difficulty.STRONG), state.game.id) } }
         viewModelScope.launch { repository.games.collect { games ->
             val (report, questions) = withContext(Dispatchers.Default) {
                 val report = weaknessTracker.build(games)
@@ -125,7 +129,13 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             mutable.update { state ->
                 val current = state.practice?.current
                 val stale = current != null && questions.none { it.key == current.key && it.bestMove == current.bestMove }
-                state.copy(games = games, weaknesses = report, practiceQuestions = questions, practiceProgress = progress,
+                val saved = games.find { it.id == state.game.id }
+                val merged = GameSnapshots.merge(state.game, saved)
+                val fresh = merged.reviews.filter { review -> review.ply >= state.game.moves.size - 1 && review.grade == Grade.BRILLIANT && !review.provisional &&
+                    state.game.reviews.none { it.ply == review.ply && it.grade == Grade.BRILLIANT && !it.provisional } }
+                if (state.page == 0 && fresh.isNotEmpty()) playFeedback(SoundCue.BRILLIANT)
+                state.copy(game = merged, games = games, weaknesses = report, practiceQuestions = questions, practiceProgress = progress,
+                    brilliantNotices = if (state.page == 0) (state.brilliantNotices + fresh).distinctBy { it.ply }.takeLast(2) else state.brilliantNotices,
                     practice = if (stale) null else state.practice,
                     error = if (stale) "这道错题已被删除或分析已更新，请重新开始练习。" else state.error)
             }
@@ -151,9 +161,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     private fun cancelWork(saveSnapshot: Boolean = true) {
         val snapshot = mutable.value.game
         generation++
-        backgroundAttempts.clear()
         work?.cancel()
-        liveAnalysis?.cancel()
         stockfishClient.stop()
         sounds.stop()
         cancelOpeningWork()
@@ -171,12 +179,14 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         val owner = try { ChessComImport.username(username) }
             catch (e: Exception) { mutable.update { it.copy(importError = e.message) }; return }
         importPreferences.saveUsername(owner)
+        AutoReview.importing(getApplication(), true)
         mutable.update { it.copy(chessComUsername = owner, importing = true, importError = null, importCount = 0,
             importDuplicates = 0, importSkipped = 0, importStatus = "开始导入…") }
         importWork = viewModelScope.launch {
             try {
                 chessComClient.import(owner, limit, { message -> mutable.update { it.copy(importStatus = message) } }) { batch ->
                     val result = withContext(Dispatchers.IO) { repository.importGames(batch.games) }
+                    AutoReview.request(getApplication())
                     mutable.update { it.copy(importCount = it.importCount + result.imported,
                         importDuplicates = it.importDuplicates + result.duplicates,
                         importSkipped = it.importSkipped + batch.skipped + result.deleted,
@@ -191,7 +201,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             } catch (e: Exception) {
                 mutable.update { it.copy(importError = e.message ?: "网络连接失败，请稍后重试",
                     importStatus = "导入未完成，已保存 ${it.importCount} 盘，可重试") }
-            } finally { mutable.update { it.copy(importing = false) } }
+            } finally { mutable.update { it.copy(importing = false) }; AutoReview.importing(getApplication(), false) }
         }
     }
     fun cancelImport() { importWork?.cancel() }
@@ -303,11 +313,11 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             return
         }
         val connectionChanged = saved.stockfishToken != mutable.value.settings.stockfishToken
-        val budgetChanged = saved.analysisBudget != mutable.value.settings.analysisBudget
         if (connectionChanged) cancelWork()
         preferences.save(saved)
+        AutoReview.request(getApplication())
         mutable.update { it.copy(settings = saved, error = null, status = "设置已保存，当前棋局继续保留") }
-        if ((connectionChanged || budgetChanged) && mutable.value.page == 0) {
+        if (connectionChanged && mutable.value.page == 0) {
             if (!mutable.value.game.finished && !mutable.value.humanTurn && !mutable.value.busy) advance()
             scheduleLiveAnalysis()
         }
@@ -356,6 +366,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             val game = finishIfNecessary(current.copy(moves = current.moves + uci))
             mutable.update { it.copy(game = game, cursor = game.moves.size, brilliantNotices = emptyList(), kingBreak = KingBreak.between(current, game)) }
             sounds.play(SoundEvents.transition(current, game))
+            AutoReview.request(getApplication())
             advance()
             scheduleLiveAnalysis()
         } catch (e: Exception) { mutable.update { it.copy(error = e.message) } }
@@ -364,18 +375,21 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         game.copy(result = result, ending = ending, finished = true)
     } ?: game
     private suspend fun persist(game: GameRecord) = persistence.withLock {
-        // Concurrent cancellation/navigation must not overwrite a newer snapshot.
-        val current = mutable.value.game
-        val latest = if (current.id == game.id) current else game
-        val timing = currentCoroutineContext()[AnalysisTiming]
-        val saved = withContext(Dispatchers.IO) {
-            val started = timing?.now()
-            try { repository.save(latest) } finally { started?.let { timing?.duration("database_ms", it) } }
-        }
-        mutable.update { state ->
-            val profile = if (saved.profile.ratedGames >= state.profile.ratedGames) saved.profile else state.profile
-            state.copy(profile = profile, game = if (state.game.id == saved.game?.id) state.game.copy(ratingChange = saved.game?.ratingChange) else state.game)
-        }
+        AutoReview.saving(getApplication(), true)
+        try {
+            // Concurrent cancellation/navigation must not overwrite a newer snapshot.
+            val current = mutable.value.game
+            val latest = if (current.id == game.id) current else game
+            val timing = currentCoroutineContext()[AnalysisTiming]
+            val saved = withContext(Dispatchers.IO) {
+                val started = timing?.now()
+                try { repository.save(latest) } finally { started?.let { timing?.duration("database_ms", it) } }
+            }
+            mutable.update { state ->
+                val profile = if (saved.profile.ratedGames >= state.profile.ratedGames) saved.profile else state.profile
+                state.copy(profile = profile, game = if (state.game.id == saved.game?.id) GameSnapshots.merge(state.game, saved.game) else state.game)
+            }
+        } finally { AutoReview.saving(getApplication(), false) }
     }
     private fun advance() {
         if (!mutable.value.ready || mutable.value.busy || mutable.value.transitioning) return
@@ -391,7 +405,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
                     val started = SystemClock.elapsedRealtime()
                     val thinkingTime = OpponentPacing.targetMs()
                     val move = if (before.mode == Difficulty.MATCHED) humanOpponent.move(before, mutable.value.games)
-                        else opponent.move(before.moves)
+                        else CloudSearchGate.mutex.withLock { opponent.move(before.moves) }
                     delay(OpponentPacing.remainingMs(thinkingTime, SystemClock.elapsedRealtime() - started))
                     currentCoroutineContext().ensureActive()
                     if (token != generation || mutable.value.game.id != before.id || mutable.value.page != 0 || mutable.value.game.finished) return@launch
@@ -416,49 +430,9 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             }
         }
     }
-    private fun scheduleLiveAnalysis() {
-        val state = mutable.value
-        if (state.settings.stockfishToken.isBlank()) return
-        if (!state.ready || state.transitioning || state.page != 0 || liveAnalysis?.isActive == true) return
-        val gameId = state.game.id
-        val token = generation
-        mutable.update { it.copy(analyzing = true) }
-        liveAnalysis = viewModelScope.launch {
-            try {
-                while (isActive) {
-                    val current = mutable.value
-                    if (token != generation || current.game.id != gameId || current.page != 0 || current.settings.stockfishToken.isBlank()) break
-                    val profile = current.settings.analysisBudget.profileName
-                    val missing = ((current.game.openingTraining?.startPly ?: 0) + 1..current.game.moves.size).filter { ply ->
-                        (ply to profile) !in backgroundAttempts && current.game.reviews.none {
-                            it.ply == ply && it.canReuseDeep(scoringElo(current.game, ply), stockfishClient.engineName, profile)
-                        }
-                    }
-                    if (missing.isEmpty()) break
-                    val nextPly = missing.find { it >= current.game.moves.size - 1 } ?: missing.first()
-                    // An inconclusive/short result is retained for manual retry, never a tight retry loop.
-                    backgroundAttempts.add(nextPly to profile)
-                    analyzePly(nextPly, deep = true, token, profileOverride = profile)
-                }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                if (token == generation) mutable.update { it.copy(error = "后台分析暂未完成：${e.message}，可在复盘重试；仍可继续走棋。") }
-            } finally {
-                if (token == generation) {
-                    mutable.update {
-                        val status = when {
-                            it.page == 1 -> it.status
-                            it.busy && !it.humanTurn -> "对手正在思考…"
-                            it.game.finished -> "${it.game.ending} · ${resultChinese(it.game)}"
-                            it.humanTurn -> "轮到你走棋"
-                            else -> "轮到对手走棋"
-                        }
-                        it.copy(analyzing = false, status = status)
-                    }
-                }
-            }
-        }
-    }
+    private fun scheduleLiveAnalysis() { AutoReview.request(getApplication()) }
+    fun pauseAutoReview() { AutoReview.pause(getApplication()) }
+    fun resumeAutoReview() { AutoReviewRetries(getApplication()).clear(); AutoReview.resume(getApplication()) }
     private suspend fun analyzePly(ply: Int, deep: Boolean, token: Int, profileOverride: String? = null) {
         if (token != generation) return
         check(mutable.value.settings.stockfishToken.isNotBlank()) { "请在对局设置中填写朋友提供的 Access Token" }
@@ -474,6 +448,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             }
             it.copy(status = status)
         }
+        persist(game)
         val scoringElo = scoringElo(game, ply)
         val timing = AnalysisTimings.begin(getApplication(), game.id, ply, deep, profileOverride)
         timing.put("scoring_elo", scoringElo)
@@ -481,13 +456,12 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             withContext(timing) {
                 val analysisStarted = timing.now()
                 val result = try {
-                    withContext(Dispatchers.Default) { analyzer.analyze(game.moves.take(ply - 1), game.moves[ply - 1], deep, scoringElo, profileOverride) }
+                    CloudSearchGate.mutex.withLock { withContext(Dispatchers.Default) { analyzer.analyze(game.moves.take(ply - 1), game.moves[ply - 1], deep, scoringElo, profileOverride) } }
                 } finally { timing.duration("analysis_ms", analysisStarted) }
                 currentCoroutineContext().ensureActive()
                 if (token != generation || game.id != mutable.value.game.id) return@withContext null
-                val previous = game.reviews.find { it.ply == ply }
-                val updated = mutable.value.game.copy(reviews = (mutable.value.game.reviews.filterNot { it.ply == ply } + result).sortedBy { it.ply },
-                    lessons = mutable.value.game.lessons.filterNot { it.ply == ply && previous != result })
+                val savedReview = withContext(Dispatchers.IO) { repository.saveReview(game, result, onlyIfUnchanged = false) } ?: return@withContext null
+                val updated = GameSnapshots.merge(mutable.value.game, savedReview)
                 val announceBrilliant = mutable.value.page == 0 && result.ply >= mutable.value.game.moves.size - 1 &&
                     result.grade == Grade.BRILLIANT && !result.provisional && mutable.value.brilliantNotices.none { it.ply == ply }
                 mutable.update { state ->
@@ -515,8 +489,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         }
     }
     private fun scoringElo(game: GameRecord, ply: Int): Int =
-        if ((ply % 2 == 1) == game.humanWhite) game.playerEloAtStart ?: mutable.value.profile.rating
-        else game.opponentElo ?: if (game.mode == Difficulty.STRONG) 2800 else 500
+        AutoAnalysis.scoringElo(game, ply)
 
     fun page(page: Int) {
         if (mutable.value.transitioning) return
@@ -877,5 +850,5 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         "1-0" -> "白方获胜"; "0-1" -> "黑方获胜"; "1/2-1/2" -> "和棋"; else -> "进行中"
     }
     suspend fun testStockfishConnection(token: String): Result<String> = stockfishClient.checkHealth(token)
-    override fun onCleared() { work?.cancel(); liveAnalysis?.cancel(); importWork?.cancel(); openingWork?.cancel(); stockfishClient.stop(); sounds.release(); super.onCleared() }
+    override fun onCleared() { work?.cancel(); importWork?.cancel(); openingWork?.cancel(); stockfishClient.stop(); AutoReview.interactive(false, null); sounds.release(); super.onCleared() }
 }

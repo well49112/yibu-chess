@@ -89,6 +89,8 @@ internal data class AnalyzeMoveRespDto(val best: EvalItemDto? = null, val played
     val second: EvalItemDto? = null, val previousBest: EvalItemDto? = null,
     val comparison: ComparisonResultDto, val engine: EngineInfoDto? = null, val stats: JsonElement? = null)
 
+class RemoteHttpException(val statusCode: Int, message: String) : IOException(message)
+
 class RemoteStockfishClient(
     private val tokenProvider: () -> String,
     private val baseUrl: String = "https://chess.jeefy.top",
@@ -189,7 +191,7 @@ class RemoteStockfishClient(
             }.getOrNull()?.take(300) ?: "远端请求失败（HTTP ${response.code}）"
         }
         val token = request.header("X-Access-Token").orEmpty()
-        return IOException(if (token.isNotEmpty()) message.replace(token, "[已隐藏]") else message)
+        return RemoteHttpException(response.code, if (token.isNotEmpty()) message.replace(token, "[已隐藏]") else message)
     }
 
     private suspend fun executeRequest(request: Request): String {
