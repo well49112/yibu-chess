@@ -25,6 +25,16 @@ class HighlightsWorkspaceTest {
     private fun advance(ms: Int) { repeat((ms + 15) / 16) {
         shadowOf(Looper.getMainLooper()).idle(); compose.mainClock.advanceTimeByFrame(); shadowOf(Looper.getMainLooper()).idle(); compose.waitForIdle()
     } }
+    @Test fun anEmptyPlayerTourExplainsTheSelectionAndCanReturnToStepByStepReview() {
+        var closed = false
+        compose.setContent { ChessTheme {
+            HighlightsWorkspace(GameRecord(moves = listOf("e2e4", "e7e5")), emptyList(), false, { closed = true }, {})
+        } }
+        compose.onNodeWithTag("highlights-empty").assertIsDisplayed()
+        compose.onNodeWithText("本局暂无值得单独讲解的关键点").assertIsDisplayed()
+        compose.onNodeWithText("查看逐步复盘").performClick()
+        assertTrue(closed)
+    }
     @Test fun tourOnlyChangesAfterManualPressAndSoundsFollowTheSelectedLineOnSmallScreen() {
         val game = GameRecord(moves = listOf("e2e4", "e7e5", "g1f3"))
         fun lesson(ply: Int, line: List<String>): MoveLesson {

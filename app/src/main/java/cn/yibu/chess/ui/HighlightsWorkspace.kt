@@ -19,7 +19,17 @@ import cn.yibu.chess.core.*
 @Composable
 internal fun HighlightsWorkspace(game: GameRecord, highlights: List<ReviewHighlight>, flipped: Boolean,
     onClose: () -> Unit, onFlip: () -> Unit) {
-    if (highlights.isEmpty()) return
+    if (highlights.isEmpty()) {
+        Column(Modifier.fillMaxSize().padding(24.dp).testTag("highlights-empty"),
+            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("本局暂无值得单独讲解的关键点", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(16.dp))
+            Text("只挑选你已确认的失误和有具体学习价值的好棋，普通换子不会凑进来。", color = Muted, lineHeight = 24.sp)
+            Spacer(Modifier.height(24.dp))
+            FilledTonalButton(onClick = feedbackClick(onClose)) { Text("查看逐步复盘") }
+        }
+        return
+    }
     var point by remember(game.id, highlights) { mutableIntStateOf(0) }
     var frame by remember(game.id, highlights) { mutableIntStateOf(0) }
     var complete by remember(game.id, highlights) { mutableStateOf(false) }
@@ -93,8 +103,7 @@ internal fun HighlightsWorkspace(game: GameRecord, highlights: List<ReviewHighli
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(when {
                     frame == 0 -> highlight.reason
-                    frame == 1 -> listOf(highlight.reason, highlight.lesson?.playedExplanation.orEmpty())
-                        .filter { it.isNotBlank() }.joinToString("\n\n")
+                    frame == 1 -> highlight.lesson?.playedExplanation?.takeIf { it.isNotBlank() } ?: highlight.reason
                     frame == 2 -> highlight.lesson?.why.orEmpty()
                     else -> step?.title.orEmpty()
                 }, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.testTag("highlight-explanation"))

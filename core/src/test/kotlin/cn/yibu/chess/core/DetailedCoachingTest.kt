@@ -111,4 +111,41 @@ class DetailedCoachingTest {
         assertFalse(MoveCoach.canReuse(old, review))
         assertEquals("旧原因", old.why)
     }
+
+    @Test fun quietKnightMistakeExplainsLostTempoAndTheOpponentsConcreteCentralBreak() {
+        val history = listOf("e2e4", "e7e6", "b1c3", "e6e5", "f1c4", "f8c5", "d2d3", "g8f6", "f2f3", "c7c6", "g1e2")
+        val review = review(history, listOf("b7b5", "c4b3", "d7d5", "e4d5", "c6d5"),
+            listOf("b8a6", "d3d4", "e5d4", "e2d4", "d7d6"))
+        val lesson = MoveCoach.explain(history, review)
+        val text = lesson.playedExplanation
+        assertTrue(text.contains("b5 用兵攻击c4的白象"))
+        assertTrue(text.contains("Na6 没有制造这层压力"))
+        assertTrue(text.contains("Bb3"))
+        assertTrue(text.contains("把兵从d3推进中心d4"))
+        assertTrue(text.contains("c5的黑象"))
+        assertTrue(text.contains("e5的黑兵"))
+        assertTrue(text.indexOf("为什么这步有问题") < text.indexOf("引擎参考评价"))
+        assertFalse(text.contains("本方的局面质量下降"))
+        val reason = MoveCoach.keyReason(history, review)!!
+        assertTrue(reason.contains("c4的白象"))
+        assertTrue(reason.contains("d4"))
+        assertFalse(reason.contains("百分点"))
+    }
+
+    @Test fun aQuietMoveWithOnlyAScoreGapAndNoConcreteEvidenceIsNotATeachingPoint() {
+        val history = listOf("e2e4", "e7e5", "g1f3", "b8c6")
+        val review = review(history, listOf("a2a3"), listOf("h2h3"))
+        assertNull(MoveCoach.keyReason(history, review))
+        val lesson = MoveCoach.explain(history, review)
+        assertTrue(lesson.playedExplanation.contains("没有展示出能解释差距的具体后果"))
+        assertFalse(lesson.playedExplanation.contains("局面质量下降"))
+    }
+
+    @Test fun anOldVersionThreeLessonIsRegeneratedFromTheExistingEngineEvidence() {
+        val review = review(emptyList(), listOf("e2e4", "e7e5"), listOf("d2d4", "d7d5"))
+        val current = MoveCoach.explain(emptyList(), review)
+        assertEquals(4, current.algorithmVersion)
+        assertFalse(MoveCoach.canReuse(current.copy(algorithmVersion = 3), review))
+        assertTrue(MoveCoach.canReuse(current, review))
+    }
 }

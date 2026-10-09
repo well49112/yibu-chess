@@ -9,7 +9,7 @@ import com.github.bhlangonijr.chesslib.move.Move
 
 /** Offline coaching: engine supplies the line; board facts supply the explanation. */
 object MoveCoach {
-    const val ALGORITHM_VERSION = 3
+    const val ALGORITHM_VERSION = 4
     const val MAX_VARIATION_PLIES = 16
 
     fun canReuse(lesson: MoveLesson, review: MoveReview?): Boolean =
@@ -29,12 +29,13 @@ object MoveCoach {
             review.best.mate != null && review.best.mate > 0 -> "引擎在这条最佳防守变化中找到将杀路线，优先保持连续的威胁。"
             review.best.mate != null && review.best.mate < 0 -> "引擎仍判断本方会被将杀；这是当前防守候选，不能据此认为已经脱险。"
             (review.best.cp ?: 0) < -200 -> "本方当前仍处劣势；推荐走法是在劣势中寻找更好的抵抗，不代表已经扳回局面。"
-            else -> "这是引擎当前搜索的最佳候选；目的要结合对手的防守和后续变化一起看。"
+            else -> ""
         }
         val why = buildString {
             append("建议${actor}走 $san。")
             append(reasons.joinToString("；").ifEmpty { "通过${action(history, line.first())}调整站位，衔接下方参考变化" })
-            append("。\n").append(scoreNote)
+            append("。")
+            if (scoreNote.isNotBlank()) append("\n").append(scoreNote)
             append("\n\n").append(playedExplanation)
         }
         val steps = annotatedSteps(history, line)
@@ -60,12 +61,10 @@ object MoveCoach {
             .takeIf { it.firstOrNull() == review.uci }.orEmpty()
         val side = ChessRules.board(history).sideToMove
         return buildString {
-            if (recommended.first() == review.uci) {
-                append("实战与推荐一致：${review.san}。重点是理解对手的下一着，保持这个计划，而不是只记住这一步。")
-                return@buildString
-            }
+            val same = recommended.first() == review.uci
             append("实战走的是 ${review.san}。")
             if (!confirmed) append("本步评价尚未确认；先比较两条参考变化，暂不把分值差认定为失误。")
+            else if (same) append("这步与推荐一致。${goodReason(history, review) ?: facts(history, review.uci).take(2).joinToString("；") }。")
             else if (!worse) append("与推荐有差别，但当前证据不足以把它说成明显失误。")
             else {
                 append("\n为什么这步有问题：")
@@ -74,11 +73,8 @@ object MoveCoach {
                         append("这步给对手留下了强制将杀路线；即使本方接下来尽力防守，当前搜索仍判断王无法逃脱。")
                     review.best.mate != null && review.best.mate > 0 && (review.played.mate ?: 0) <= 0 ->
                         append("原本存在将杀路线，这步没有保留它，让对手获得了防守机会。")
-                    else -> append("本方的局面质量下降，关键要看对手怎样回应，而不是只看这步是否吃子或将军。")
-                }
-                if (review.best.cp != null && review.played.cp != null) {
-                    append("从行棋方视角，最佳与实战的搜索评价分别为 ${review.best.display()}、${review.played.display()}；")
-                    append("这是局面评价，不是确定会损失这么多兵。")
+                    else -> append(differences(history, recommended, played).take(2).joinToString("\n")
+                        .ifEmpty { "当前合法变化没有展示出能解释差距的具体后果；可深入复评，暂不推测战术原因。" })
                 }
             }
             if (played.size >= 2) {
@@ -120,7 +116,8 @@ object MoveCoach {
                 }
                 append("\n实战后续参考：${ChessRules.variationSan(history, played).joinToString(" → ")}。")
             } else append("\n引擎没有给出合法的实战后续，暂不能具体断言对手怎样惩罚这步；可重新复评本步。")
-            append("\n推荐的改进：${ChessRules.san(history, recommended.first())}，")
+            append(if (same) "\n这步的作用：" else "\n推荐的改进：")
+            append("${ChessRules.san(history, recommended.first())}，")
             append(facts(history, recommended.first()).take(3).joinToString("；").ifEmpty { action(history, recommended.first()) }).append("。")
             val length = minOf(played.size, recommended.size)
             if (worse && length >= 2) {
@@ -128,8 +125,152 @@ object MoveCoach {
                     material(ChessRules.board(history + played.take(length)), side)
                 if (advantage >= 1) append("比较两条路线各前 $length 着，推荐路线的净子力多 $advantage 点；也要继续看王的安全和能否回吃。")
             }
-            append("\n下次落子前：先找对手的将军、吃子和直接威胁，再问自己这步之后最强的回应是什么；发现威胁后，比较移开、保护、交换或制造更紧急的威胁。")
+            if (worse && review.best.cp != null && review.played.cp != null) {
+                append("\n引擎参考评价：推荐 ${review.best.display()}，实战 ${review.played.display()}（行棋方视角）。")
+                append("这是局面评价，不是确定会损失这么多兵。")
+            }
         }
+    }
+
+    /** A tour needs a concrete lesson, not merely a high or low numeric score. */
+    fun keyReason(history: List<String>, review: MoveReview): String? {
+        val best = ChessRules.legalVariation(history, review.best.pv.take(8))
+        val played = ChessRules.legalVariation(history, review.played.pv.take(8))
+            .takeIf { it.firstOrNull() == review.uci }.orEmpty()
+        if (best.isEmpty() || played.isEmpty()) return null
+        if (review.bestMove != review.uci && (review.pointsLost >= .04 ||
+                review.grade in listOf(Grade.INACCURACY, Grade.MISTAKE, Grade.BLUNDER))) {
+            if (review.played.mate != null && review.played.mate < 0 && (review.best.mate ?: 0) >= 0)
+                return "这步允许对手沿 ${ChessRules.variationSan(history, played).take(4).joinToString(" → ")} 发动将杀攻势。"
+            if (review.best.mate != null && review.best.mate > 0 && (review.played.mate ?: 0) <= 0)
+                return "错过将杀路线：${ChessRules.variationSan(history, best).take(4).joinToString(" → ")}。"
+            return differences(history, best, played).take(2).joinToString("\n").takeIf { it.isNotBlank() }
+        }
+        return if (review.pointsLost < .02) goodReason(history, review) else null
+    }
+
+    private fun label(board: Board, square: Square): String =
+        "${square.toString().lowercase()}的${if (board.getPiece(square).pieceSide == Side.WHITE) "白" else "黑"}${ChessRules.pieceChinese(board.getPiece(square))}"
+
+    private val centers = listOf(Square.D4, Square.E4, Square.D5, Square.E5)
+
+    private fun targets(board: Board, square: Square, side: Side): List<Square> = Square.entries.filter {
+        it != Square.NONE && board.getPiece(it) != Piece.NONE && board.getPiece(it).pieceSide != side &&
+            board.squareAttackedBy(it, side) and square.bitboard != 0L
+    }
+
+    private fun differences(history: List<String>, best: List<String>, played: List<String>): List<String> {
+        if (best.isEmpty() || played.isEmpty() || best.first() == played.first()) return emptyList()
+        val before = ChessRules.board(history)
+        val side = before.sideToMove
+        val choice = Move(best.first(), side)
+        val actual = Move(played.first(), side)
+        val better = ChessRules.board(history + best.first())
+        val worse = ChessRules.board(history + played.first())
+        val notes = mutableListOf<String>()
+        val bestSan = ChessRules.san(history, best.first())
+        val actualSan = ChessRules.san(history, played.first())
+        if (played.size >= 2) {
+            val replyRoot = history + played.first()
+            val reply = Move(played[1], side.flip())
+            val victim = capturedPiece(worse, reply)
+            val afterReply = ChessRules.board(replyRoot + played[1])
+            val loss = material(before, side) - material(afterReply, side)
+            val recapture = afterReply.legalMoves().any { it.to == reply.to }
+            if (victim != Piece.NONE && loss > 0 && !recapture)
+                notes += "$actualSan 之后，对手可走 ${ChessRules.san(replyRoot, played[1])}，吃掉${label(worse, capturedSquare(worse, reply))}；本方没有合法的立即回吃，两着交换后净少 $loss 点子力。"
+        }
+        val pressure = targets(better, choice.to, side).filter { pieceValue(better.getPiece(it)) >= 3 &&
+            it !in targets(worse, actual.to, side) && before.getPiece(it) == better.getPiece(it) }
+        if (pressure.isNotEmpty()) {
+            var note = "$bestSan 用${ChessRules.pieceChinese(better.getPiece(choice.to))}攻击${pressure.joinToString("、") { label(better, it) }}；$actualSan 没有制造这层压力。"
+            best.getOrNull(1)?.let { uci ->
+                val reply = Move(uci, side.flip())
+                if (reply.from in pressure && better.getPiece(reply.from) != Piece.NONE)
+                    note += "推荐线中，对手随后用 ${ChessRules.san(history + best.first(), uci)} 把这枚子从${reply.from.toString().lowercase()}撤到${reply.to.toString().lowercase()}。"
+            }
+            notes += note
+        }
+        if (played.size >= 2) {
+            val reply = Move(played[1], side.flip())
+            val bestReply = best.getOrNull(1)?.let { Move(it, side.flip()) }
+            if (worse.getPiece(reply.from).pieceType == PieceType.PAWN && reply.to in centers && bestReply?.to != reply.to) {
+                val after = ChessRules.board(history + played.take(2))
+                val attacked = targets(after, reply.to, side.flip()).filter { after.getPiece(it).pieceType != PieceType.KING }
+                notes += "实战线中，对手有时间走 ${ChessRules.san(history + played.first(), played[1])}，把兵从${reply.from.toString().lowercase()}推进中心${reply.to.toString().lowercase()}" +
+                    if (attacked.isEmpty()) "，建立新的中心据点。" else "，同时攻击${attacked.joinToString("、") { label(after, it) }}。"
+            }
+        }
+        val escaped = Square.entries.filter { sq -> sq != Square.NONE && before.getPiece(sq) != Piece.NONE &&
+            before.getPiece(sq).pieceSide == side && pieceValue(before.getPiece(sq)) >= 3 &&
+            worse.getPiece(sq) == before.getPiece(sq) && worse.legalMoves().any { it.to == sq } &&
+            (better.getPiece(sq) != before.getPiece(sq) || better.legalMoves().none { it.to == sq }) }
+        if (escaped.isNotEmpty()) notes += "实战之后，${escaped.joinToString("、") { label(worse, it) }}仍可被对手合法吃掉；$bestSan 避开了同样的直接吃子。"
+        val controlled = centers.filter { better.squareAttackedBy(it, side) and choice.to.bitboard != 0L &&
+            worse.squareAttackedBy(it, side) and actual.to.bitboard == 0L }
+        if (controlled.isNotEmpty()) notes += "$bestSan 让${ChessRules.pieceChinese(better.getPiece(choice.to))}直接控制${controlled.joinToString("、") { it.toString().lowercase() }}；$actualSan 的新站位没有这层中心控制。"
+        val exchangeLength = minOf(played.size, best.size, 6)
+        if (exchangeLength >= 2) {
+            val advantage = material(ChessRules.board(history + best.take(exchangeLength)), side) -
+                material(ChessRules.board(history + played.take(exchangeLength)), side)
+            if (advantage > 0) notes += "两条参考线各走 $exchangeLength 着后，推荐线保留的净子力比实战线多 $advantage 点（已计入双方吃子）；可跟棋盘检查损失发生在哪一着。"
+        }
+        return notes.distinct()
+    }
+
+    private fun goodReason(history: List<String>, review: MoveReview): String? {
+        val line = ChessRules.legalVariation(history, review.played.pv.take(8)).takeIf { it.firstOrNull() == review.uci } ?: return null
+        val before = ChessRules.board(history)
+        val side = before.sideToMove
+        val move = Move(line.first(), side)
+        val after = ChessRules.board(history + line.first())
+        if (after.isMated) return "${review.san}直接将杀；对方已没有合法的解将走法。"
+        if (review.grade == Grade.BRILLIANT && ChessRules.substantialSacrifice(history, line))
+            return review.brilliantReason ?: ChessRules.brilliantNote(history, review.played).reason
+        val attacked = targets(after, move.to, side).filter { pieceValue(after.getPiece(it)) >= 3 || after.getPiece(it).pieceType == PieceType.KING }
+        if (attacked.size >= 2 && line.size >= 3) {
+            val follow = Move(line[2], side)
+            val continuation = ChessRules.board(history + line.take(2))
+            if (follow.from == move.to && follow.to in attacked && capturedPiece(continuation, follow) != Piece.NONE)
+                return "这步形成双攻：${ChessRules.pieceChinese(after.getPiece(move.to))}同时攻击${attacked.joinToString("、") { label(after, it) }}。参考线中对手应对后，本方用 ${ChessRules.san(history + line.take(2), line[2])} 吃掉其中一枚子。"
+        }
+        if (review.played.mate != null && review.played.mate > 0 && after.isKingAttacked)
+            return "${review.san}以将军开始将杀路线：${ChessRules.variationSan(history, line).take(4).joinToString(" → ")}。"
+        if (routineExchange(history, line)) return null
+        val gain = material(ChessRules.board(history + line), side) - material(before, side)
+        val victim = capturedPiece(before, move)
+        if (pieceValue(victim) >= 3 && gain >= 1 && (line.size >= 2 || after.legalMoves().none { it.to == move.to }))
+            return "${review.san}吃掉${label(before, capturedSquare(before, move))}；参考线走完 ${line.size} 着并计入双方吃子后，本方净增加 $gain 点子力。"
+        if (review.grade == Grade.GREAT && review.second != null) {
+            val alternative = ChessRules.legalVariation(history, review.second.pv.take(8))
+            return differences(history, line, alternative).firstOrNull()?.let { "关键在于：$it" }
+        }
+        return null
+    }
+
+    /** Equal capture/recapture is routine unless the caller found mate, sacrifice or a fork. */
+    private fun routineExchange(history: List<String>, line: List<String>): Boolean {
+        if (line.isEmpty()) return false
+        val before = ChessRules.board(history)
+        val move = Move(line.first(), before.sideToMove)
+        val victim = capturedPiece(before, move)
+        if (victim == Piece.NONE || move.promotion != Piece.NONE) return false
+        history.lastOrNull()?.let { uci ->
+            val earlier = ChessRules.board(history.dropLast(1))
+            val previous = Move(uci, earlier.sideToMove)
+            if (previous.to == move.to && previous.promotion == Piece.NONE &&
+                pieceValue(capturedPiece(earlier, previous)) == pieceValue(victim) &&
+                capturedPiece(earlier, previous) != Piece.NONE) return true
+        }
+        var root = history + line.first()
+        for (uci in line.drop(1).take(3)) {
+            val board = ChessRules.board(root)
+            val reply = Move(uci, board.sideToMove)
+            if (reply.to != move.to || capturedPiece(board, reply) == Piece.NONE || reply.promotion != Piece.NONE) break
+            root = root + uci
+            if (material(ChessRules.board(root), before.sideToMove) == material(before, before.sideToMove)) return true
+        }
+        return false
     }
 
     private fun pieceValue(piece: Piece): Int = when (piece.pieceType) {
@@ -214,6 +355,7 @@ object MoveCoach {
         else targets.firstOrNull { after.getPiece(it).pieceType != PieceType.PAWN && after.getPiece(it).pieceType != PieceType.KING }?.let {
             result += "新站位瞄准${it.toString().lowercase()}的${ChessRules.pieceChinese(after.getPiece(it))}，给对方增加需要处理的威胁"
         }
+        if (isPawn && targets.isNotEmpty()) result += "这枚兵从新格同时攻击${targets.joinToString("、") { label(after, it) }}，要结合对手的移子或交换判断是否能赢子"
         val homeRank = if (side == Side.WHITE) 0 else 7
         if (piece.pieceType in listOf(PieceType.KNIGHT, PieceType.BISHOP) && from / 8 == homeRank && to / 8 != homeRank && history.size < 24)
             result += "把${ChessRules.pieceChinese(piece)}从底线发展出来，让它参与争夺局面"

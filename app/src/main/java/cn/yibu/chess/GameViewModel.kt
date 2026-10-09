@@ -461,7 +461,8 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     private fun reviewGame(guided: Boolean) {
         if (!mutable.value.ready || mutable.value.busy || mutable.value.page != 1 || mutable.value.game.moves.isEmpty()) return
         val current = mutable.value.game
-        val needsSearch = (1..current.moves.size).any { ply ->
+        val plies = (1..current.moves.size).filter { !guided || (it % 2 == 1) == current.humanWhite }
+        val needsSearch = plies.any { ply ->
             current.reviews.find { it.ply == ply }?.canReuseDeep(scoringElo(current, ply), stockfishClient.engineName) != true
         }
         if (needsSearch && mutable.value.settings.stockfishToken.isBlank()) {
@@ -473,18 +474,19 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         work = viewModelScope.launch {
             try {
                 val game = mutable.value.game
-                for (ply in 1..game.moves.size) {
+                for ((index, ply) in plies.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     val review = mutable.value.game.reviews.find { it.ply == ply }
                     if (review?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true) analyzePly(ply, true, token)
-                    mutable.update { it.copy(reviewDone = ply, status = "深度复盘 $ply / ${game.moves.size}") }
+                    mutable.update { it.copy(reviewDone = index + 1, status = if (guided)
+                        "分析你的棋步 ${index + 1} / ${plies.size}" else "深度复盘 ${index + 1} / ${plies.size}") }
                 }
                 currentCoroutineContext().ensureActive()
                 if (guided && token == generation && mutable.value.game.id == game.id) {
                     val highlights = withContext(Dispatchers.Default) { GameHighlights.build(mutable.value.game) }
                     currentCoroutineContext().ensureActive()
                     if (token == generation && mutable.value.page == 1 && mutable.value.game.id == game.id)
-                        mutable.update { it.copy(highlights = highlights, highlightsOpen = highlights.isNotEmpty()) }
+                        mutable.update { it.copy(highlights = highlights, highlightsOpen = true) }
                     playFeedback(SoundCue.CONFIRM)
                 }
             } catch (e: CancellationException) { throw e }
