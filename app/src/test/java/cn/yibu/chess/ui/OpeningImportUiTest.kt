@@ -31,7 +31,7 @@ class OpeningImportUiTest {
         val col = if (flipped) 7 - i % 8 else i % 8
         val row = if (flipped) i / 8 else 7 - i / 8
         compose.onNodeWithContentDescription("国际象棋棋盘，${if (flipped) "黑方" else "白方"}视角")
-            .performTouchInput { click(Offset((col + .5f) * width / 8f, (row + .5f) * height / 8f)) }
+            .performScrollTo().performTouchInput { click(Offset((col + .5f) * width / 8f, (row + .5f) * height / 8f)) }
     }
     @Test fun libraryContainsOnlyGamesAndImportWithSavedUsernameAndNoTrainingCards() {
         val vm = model()
@@ -88,7 +88,7 @@ class OpeningImportUiTest {
         } } }
     }
     @Test fun manualStepsShowAuthoredReasonsAndWhiteQuizExplainsCastlingAfterBoardAnswer() {
-        workspace(OpeningSession("italian"))
+        workspace(OpeningSession("italian").seek(0))
         compose.mainClock.advanceTimeBy(5000)
         compose.onNodeWithTag("opening-note").assertDoesNotExist() // No autoplay.
         compose.onNodeWithText("下一步").assertIsDisplayed().performClick()
@@ -96,8 +96,9 @@ class OpeningImportUiTest {
         compose.onNodeWithText("分支练习").assertIsDisplayed().performClick()
         compose.onNodeWithTag("opening-answer").assertDoesNotExist()
         tap("e1", false); tap("g1", false)
-        compose.onNodeWithTag("opening-answer").assertTextContains("王放到g1", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("opening-answer").performScrollTo().assertTextContains("王放到g1", substring = true).assertIsDisplayed()
         compose.featureScreenshot("opening-answer")
+        compose.onNodeWithTag("opening-tools").performClick()
         compose.onNodeWithText("自由试走").performClick()
         tap("d7", false); tap("d6", false)
         compose.onNodeWithText("撤回").assertIsEnabled().performClick()
@@ -107,11 +108,13 @@ class OpeningImportUiTest {
         workspace(OpeningSession("caro-kann").quiz())
         tap("c8", true); tap("f5", true)
         compose.onNodeWithTag("opening-answer").assertExists()
+        compose.onNodeWithTag("opening-tools").performClick()
         compose.onNodeWithText("自由试走").performClick()
         tap("e4", true); tap("g3", true)
         compose.onNodeWithText("现在黑方走").assertExists()
         tap("f5", true); tap("g6", true)
         compose.onNodeWithText("现在白方走").assertExists()
+        compose.onNodeWithTag("opening-tools").performClick()
         compose.onNodeWithText("从这里陪练").assertIsDisplayed().assertIsEnabled()
     }
 }

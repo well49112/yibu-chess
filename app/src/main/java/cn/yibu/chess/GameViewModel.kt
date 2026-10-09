@@ -238,7 +238,27 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         mutable.update { it.copy(openingProgress = progress) }
     }
     fun courseQuiz() { cancelOpeningWork(); mutable.update { it.copy(opening = it.opening?.quiz()) } }
-    fun courseHint() { mutable.update { it.copy(opening = it.opening?.copy(hint = true)) } }
+    fun courseHint() { mutable.update { it.copy(opening = it.opening?.lessonHint()) } }
+    fun courseGuided() { cancelOpeningWork(); mutable.update { it.copy(opening = it.opening?.guided()) } }
+    fun courseContinue() {
+        val current = mutable.value.opening ?: return
+        cancelOpeningWork()
+        val next = current.continueLesson()
+        mutable.update { it.copy(opening = next) }
+        reviewSound(current.history, next.history)
+        if (next.lessonPhase == OpeningLessonPhase.DONE && current.lessonPhase != OpeningLessonPhase.DONE) {
+            markOpening("${next.key}:learn")
+            markOpening("${next.key}:guided")
+            if (next.firstTry == next.lessonPlies.size && next.assisted == 0) markOpening("${next.key}:quiz")
+            playFeedback(SoundCue.CONFIRM)
+        }
+    }
+    fun courseShowMove() {
+        val current = mutable.value.opening ?: return
+        val next = current.showLessonMove()
+        mutable.update { it.copy(opening = next) }
+        reviewSound(current.history, next.history)
+    }
     fun courseExplore() { cancelOpeningWork(); mutable.update { it.copy(opening = it.opening?.explore()) } }
     fun courseUndo() {
         val current = mutable.value.opening ?: return
@@ -255,8 +275,8 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         mutable.update { it.copy(opening = next) }
         if (next.history != current.history) reviewSound(current.history, next.history)
         else if (next.message.isNotBlank()) playFeedback(SoundCue.ILLEGAL)
-        if (current.mode == OpeningMode.QUIZ && current.solvedMove == null && next.solvedMove != null) {
-            markOpening("${next.key}:quiz")
+        if ((current.mode == OpeningMode.QUIZ || current.mode == OpeningMode.GUIDE) && current.solvedMove == null && next.solvedMove != null) {
+            if (current.mode == OpeningMode.QUIZ) markOpening("${next.key}:quiz")
             playFeedback(SoundCue.CONFIRM)
         }
     }

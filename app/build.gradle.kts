@@ -16,8 +16,8 @@ android {
         applicationId = "cn.yibu.chess"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "1.0.1"
+        versionCode = 23
+        versionName = "1.0.2"
         buildConfigField("String", "ONNX_RUNTIME_VERSION", "\"$onnxRuntimeVersion\"")
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

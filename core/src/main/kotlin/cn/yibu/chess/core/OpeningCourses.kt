@@ -278,7 +278,7 @@ object OpeningCourses {
         OpeningCourse("french", "法兰西防御", false, "理解关闭中心里的兵链与c5反击。", "e6、d5建立支撑；遇到e5，退马后用c5、Nc6共同攻击d4。", "c8象会受e6兵限制，需要后续安排出路；不要让王长期留在打开的中心。", listOf(french, frenchExchange)),
         OpeningCourse("sicilian", "西西里防御", false, "用c5争夺d4，理解开放c线与正常出子。", "交换d4后发展两匹马，d6、e6支持中心，Be7和易位把王安置好。", "白方c3时路线会改变；看到e5攻击马，先撤马再执行其他计划。", listOf(sicilian, sicilianAlapin)),
         OpeningCourse("queen-defense", "后兵稳固防守", false, "对1.d4建立d5支点，分别应对后翼弃兵与伦敦。", "对c4可用e6、Nf6护d5并易位；对伦敦常用c5冲击d4、Qb6攻击b2。", "e6会限制c8象，可考虑b6、Bb7解决；不要只守住d5却一直不出子。", listOf(queenGambit.copy(checkpoint = check(3, "用兵保护受到c4攻击的d5", "e7兵前进一步就能保护d5。", "e7e6", "e6兵支持d5，并打开f8象。代价是c8象暂时被限制，后续要安排出路。"), identityPlies = 4), queenLondon)),
-    )
+    ).map { it.copy(routes = it.routes + OpeningBranches.forCourse(it)) }
 
     fun match(game: GameRecord): OpeningMatch? = all.asSequence().filter { it.humanWhite == game.humanWhite }
         .flatMap { course -> course.routes.asSequence().mapIndexedNotNull { index, route ->

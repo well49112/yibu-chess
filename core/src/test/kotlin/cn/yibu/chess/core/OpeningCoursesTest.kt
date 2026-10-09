@@ -9,7 +9,8 @@ class OpeningCoursesTest {
         assertEquals(5, OpeningCourses.all.count { it.humanWhite })
         assertEquals(10, OpeningCourses.all.map { it.id }.distinct().size)
         OpeningCourses.all.forEach { course ->
-            assertEquals(2, course.routes.size)
+            assertEquals(4, course.routes.size)
+            assertEquals(4, course.routes.map { it.id }.distinct().size)
             assertEquals(16, course.routes.first().moves.size)
             course.routes.forEach { route ->
                 assertEquals("${course.id}/${route.title}", route.moves, ChessRules.legalVariation(emptyList(), route.moves))
@@ -56,7 +57,7 @@ class OpeningCoursesTest {
         assertEquals(session.history + "b1c3", free.history)
         assertEquals(OpeningMode.FREE, free.mode)
         assertEquals(course.routes[0].moves.take(8), free.seek(8).history)
-        assertEquals(OpeningMode.LEARN, free.changeRoute(1).mode)
+        assertEquals(OpeningMode.GUIDE, free.changeRoute(1).mode)
         assertTrue(free.changeRoute(1).history.isEmpty())
         assertEquals(course.routes[0].moves, OpeningSession(course.id).seek(99).history)
     }

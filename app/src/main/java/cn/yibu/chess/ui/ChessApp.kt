@@ -121,7 +121,8 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
                             OpeningWorkspace(state.opening, state.openingThinking, state.ready, state.openingProgress, state.games,
                                 model::closeCourse, model::courseRoute, model::courseSeek, model::courseQuiz, model::courseHint,
                                 model::courseExplore, model::courseAnswer, model::courseUndo, model::courseReply, model::trainOpening,
-                                { game, ply -> model.load(game); model.cursor(ply) })
+                                { game, ply -> model.load(game); model.cursor(ply) },
+                                model::courseContinue, model::courseGuided, model::courseShowMove)
                         }
                     } else if (state.page == 3) {
                         TrainingHub(state, model)
