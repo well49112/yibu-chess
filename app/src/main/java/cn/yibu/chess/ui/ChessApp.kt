@@ -213,7 +213,7 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
                             if (state.page == 1) {
                                 PrimaryAction("整盘深度复评", model::reviewAll, Modifier.fillMaxWidth(),
                                     state.ready && !state.busy && state.game.moves.isNotEmpty(), ChessIcon.REVIEW)
-                                Text("重新深入分析双方的每一着，更新极速缓存。上方全局复盘只挑选你的关键点。", color = Muted, fontSize = 11.sp)
+                                Text("lightning · 目标 22 层 · 0.5 秒搜索预算，网络耗时另计。重新分析双方每一着；上方全局复盘只挑选你的关键点。", color = Muted, fontSize = 11.sp)
                                 OutlinedButton(onClick = feedbackClick { context.startActivity(model.share(false)) },
                                     enabled = state.game.moves.isNotEmpty(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                                     LineIcon(ChessIcon.SHARE, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("导出 PGN")

@@ -22,8 +22,10 @@ import org.robolectric.annotation.GraphicsMode
 class PracticeWorkspaceTest {
     @get:Rule val compose = createComposeRule()
     private fun question(root: List<String> = listOf("e2e4", "e7e5", "d1h5", "b8c6"), best: String = "h5f3", played: String = "h5e5"): PracticeQuestion {
-        val review = MoveReview(root.size + 1, played, ChessRules.san(root, played), Evaluation(22, cp = 30, pv = listOf(best)),
-            Evaluation(22, cp = -800, pv = listOf(played)), grade = Grade.BLUNDER, explanation = "")
+        val reply = when (played) { "h5e5" -> "c6e5"; "h4e4" -> "c3e4"; else -> null }
+        val follow = when (best) { "h5f3" -> "g8f6"; "h4d8" -> "g1f3"; else -> null }
+        val review = MoveReview(root.size + 1, played, ChessRules.san(root, played), Evaluation(22, cp = 30, pv = listOf(best) + listOfNotNull(follow)),
+            Evaluation(22, cp = -800, pv = listOf(played) + listOfNotNull(reply)), grade = Grade.BLUNDER, explanation = "")
         return PracticeQuestion(123, root.size + 1, root, review, WeaknessType.HANGING_PIECE, "这步允许对手吃掉后。", setOf(best))
     }
     private fun tap(square: String, flipped: Boolean) {
@@ -47,7 +49,8 @@ class PracticeWorkspaceTest {
             Spacer(Modifier.height(80.dp))
         } } }
         compose.onNodeWithTag("practice-answer").assertDoesNotExist()
-        compose.onNodeWithText("这步允许对手吃掉后。").assertDoesNotExist()
+        compose.onNodeWithTag("practice-wrong-move").assertTextContains("Qxe5+（后从h5到e5）", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("practice-improvement").assertDoesNotExist()
         compose.onNodeWithText("给点提示").assertIsDisplayed().performClick()
         compose.onNodeWithTag("practice-hint").assertTextContains("回吃", substring = true)
         compose.onNodeWithText("再提示一步").performClick()
@@ -55,6 +58,8 @@ class PracticeWorkspaceTest {
         compose.onNodeWithTag("practice-answer").assertDoesNotExist()
         compose.onNodeWithText("查看答案").assertIsDisplayed().performClick()
         compose.onNodeWithTag("practice-answer").assertTextEquals("推荐 Qf3")
+        compose.onNodeWithTag("practice-mistake-reason").assertTextContains("Nxe5", substring = true)
+        compose.onNodeWithTag("practice-improvement").assertTextContains("把后从h5移到f3", substring = true)
         assertEquals(0, state.value.independent)
         compose.featureScreenshot("practice-revealed-small-screen")
         compose.onNodeWithText("完成").performClick()
@@ -72,6 +77,22 @@ class PracticeWorkspaceTest {
         tap(question.bestMove.substring(2, 4), !question.humanWhite)
         assertEquals(question.bestMove, received)
         compose.onNodeWithTag("practice-answer").assertDoesNotExist()
+    }
+
+    @Test fun aCorrectAnswerImmediatelyShowsTheConcreteComparisonAndKeepsNavigationVisible() {
+        val question = question()
+        val session = mutableStateOf(PracticeSession(listOf(question)))
+        compose.setContent { ChessTheme {
+            PracticeWorkspace(session.value, {}, onAnswer = { session.value = session.value.copy(solvedMove = it, independent = 1, message = "独立答对了") },
+                onHint = {}, onReveal = {}, onNext = {}, onExplain = {})
+        } }
+        tap("h5", false); tap("f3", false)
+        compose.onNodeWithTag("practice-answer").assertTextEquals("你答的是 Qf3")
+        compose.onNodeWithTag("practice-mistake-reason").performScrollTo().assertIsDisplayed().assertTextContains("净少 8 点", substring = true)
+        compose.onNodeWithTag("practice-improvement").performScrollTo().assertIsDisplayed().assertTextContains("对手没有合法的一步吃掉f3", substring = true)
+        compose.onNodeWithText("对照讲解").assertIsDisplayed()
+        compose.onNodeWithText("完成").assertIsDisplayed()
+        compose.featureScreenshot("practice-correct-concrete-explanation")
     }
 
     @Test fun promotionAsksWhichPieceAndSubmitsTheFullUciMove() {

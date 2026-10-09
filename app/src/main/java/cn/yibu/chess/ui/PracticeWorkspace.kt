@@ -56,7 +56,12 @@ internal fun PracticeWorkspace(session: PracticeSession, onClose: () -> Unit, on
     val targets = remember(selected, legal) { legal.filter { it.take(2) == selected?.let(ChessRules::squareName) }
         .map { ChessRules.squareIndex(it.substring(2, 4)) }.toSet() }
     val history = question.history + listOfNotNull(session.solvedMove)
+    val solvedMove = session.solvedMove
     val fen = remember(history) { ChessRules.board(history).fen }
+    val wrongMove = remember(question) { PracticeCoach.wrongMove(question) }
+    val explanation = remember(question, session.finished, session.solvedMove) {
+        if (session.finished) PracticeCoach.explain(question, session.solvedMove ?: question.bestMove) else null
+    }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("practice-workspace")) {
         val boardSize = minOf(maxWidth - 8.dp, maxHeight * .48f, 340.dp).coerceAtLeast(140.dp)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -85,17 +90,28 @@ internal fun PracticeWorkspace(session: PracticeSession, onClose: () -> Unit, on
             Column(Modifier.weight(1f).fillMaxWidth().background(Soft, RoundedCornerShape(16.dp))
                 .verticalScroll(key(question.key, session.finished) { rememberScrollState() }).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("你当时的错误走法：$wrongMove", color = Danger, fontSize = 13.sp, lineHeight = 21.sp,
+                    modifier = Modifier.testTag("practice-wrong-move"))
                 Text(if (!session.finished) "找一着比实战更好的走法。点击棋子，再点击落点。" else session.message,
                     fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.testTag("practice-prompt"))
                 if (!session.finished && session.message.isNotBlank()) Text(session.message, color = Danger, fontSize = 13.sp, lineHeight = 20.sp)
                 if (session.hints > 0 && !session.finished) Text(MistakePractice.hint(question, session.hints), color = Accent,
                     fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.testTag("practice-hint"))
                 if (session.finished) {
-                    Text("推荐 ${ChessRules.san(question.history, question.bestMove)}", color = Accent, fontWeight = FontWeight.SemiBold,
+                    Text(if (solvedMove != null) "你答的是 ${ChessRules.san(question.history, solvedMove)}"
+                        else "推荐 ${ChessRules.san(question.history, question.bestMove)}", color = Accent, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.testTag("practice-answer"))
-                    Text(question.evidence, fontSize = 13.sp, lineHeight = 21.sp)
+                    Text("原走法为什么不好", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Text(explanation!!.mistake, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.testTag("practice-mistake-reason"))
+                    Text("这着为什么更好", color = Accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Text(explanation.improvement, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.testTag("practice-improvement"))
                     if (session.solvedMove != null && session.solvedMove != question.bestMove)
-                        Text("你找到的是已保存分析中同深度、评分接近的另一候选，也接受为本题答案。", color = Muted, fontSize = 11.sp)
+                        Text("你找到的是同深度、评分接近的另一候选。上面解释的是你这着；引擎首选是 ${ChessRules.san(question.history, question.bestMove)}。", color = Muted, fontSize = 11.sp)
+                    Text("后续参考应对", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    explanation.continuation.forEachIndexed { index, step ->
+                        Text("${index + 1}. ${step.title}\n${step.explanation}", fontSize = 12.sp, lineHeight = 20.sp)
+                    }
+                    Text("以上为已保存的参考变化，对手可以改走。点击对照讲解，用棋盘逐步比较完整路线。", color = Muted, fontSize = 11.sp, lineHeight = 18.sp)
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

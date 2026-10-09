@@ -81,6 +81,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     private val stockfishClient = remoteClient ?: RemoteStockfishClient({ mutable.value.settings.stockfishToken })
     private val maia = MaiaModel(application)
     private val analyzer = MoveAnalyzer(stockfishClient)
+    private val reviewProfile = AnalysisBudget.LIGHTNING.profileName
     private val opponent = Opponent(stockfishClient)
     private val humanOpponent = HumanOpponent(maia)
     private val mutable = MutableStateFlow(AppState(settings = preferences.read()))
@@ -313,7 +314,8 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         if (ply <= 0 || ply > game.moves.size) return
         mutable.update {
             val status = when {
-                it.page == 1 -> if (deep) "深度复评 $ply / ${game.moves.size}" else "正在分析第 ${(ply + 1) / 2} 回合…"
+                it.page == 1 -> if (profileOverride == reviewProfile) "极速复评 $ply / ${game.moves.size}"
+                    else if (deep) "深度复评 $ply / ${game.moves.size}" else "正在分析第 ${(ply + 1) / 2} 回合…"
                 it.busy && !it.humanTurn -> "对手正在思考…"
                 it.game.finished -> "后台深度分析第 $ply 步"
                 else -> "后台深度分析第 $ply 步 · 可继续走棋"
@@ -418,7 +420,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
             try {
                 // Updating an old explanation uses its saved engine evidence, without another cloud request.
                 if (state.chosenLesson == null && state.chosenReview?.canReuseDeep(scoringElo(state.game, ply), stockfishClient.engineName) != true)
-                    analyzePly(ply, true, token)
+                    analyzePly(ply, true, token, profileOverride = reviewProfile)
                 currentCoroutineContext().ensureActive()
                 if (token != generation || mutable.value.game.id != gameId) return@launch
                 val game = mutable.value.game
@@ -568,7 +570,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         val token = generation
         mutable.update { it.copy(busy = true, error = null) }
         work = viewModelScope.launch {
-            try { analyzePly(state.cursor, true, token) }
+            try { analyzePly(state.cursor, true, token, profileOverride = reviewProfile) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { mutable.update { it.copy(error = e.message) } }
             finally { if (token == generation) mutable.update { it.copy(busy = false, status = "本步复评完成") } }
@@ -597,16 +599,17 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         }
         val token = generation
         mutable.update { it.copy(busy = true, reviewDone = 0, error = null, lessonOpen = false, highlightsOpen = false, variation = emptyList(),
-            status = if (guided) "正在寻找本局关键点…" else "正在逐步深度复评整盘棋…") }
+            status = if (guided) "正在寻找本局关键点…" else "正在用 lightning 逐步复评整盘棋…") }
         work = viewModelScope.launch {
             try {
                 val game = mutable.value.game
                 for ((index, ply) in plies.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     val review = mutable.value.game.reviews.find { it.ply == ply }
-                    if (!guided || review?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true) analyzePly(ply, true, token)
+                    if (!guided || review?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true)
+                        analyzePly(ply, true, token, profileOverride = reviewProfile)
                     mutable.update { it.copy(reviewDone = index + 1, status = if (guided)
-                        "分析你的棋步 ${index + 1} / ${plies.size}" else "深度复盘 ${index + 1} / ${plies.size}") }
+                        "分析你的棋步 ${index + 1} / ${plies.size}" else "极速复盘 ${index + 1} / ${plies.size}") }
                 }
                 currentCoroutineContext().ensureActive()
                 if (guided && token == generation && mutable.value.game.id == game.id) {

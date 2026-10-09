@@ -31,19 +31,22 @@ class FullReviewTest {
         }
         assertTrue("State did not settle: ${model.state.value.error}", condition())
     }
-    @Test fun aFullDeepReviewReanalyzesBothColorsEvenWhenEveryPlyHasAValidLightningCache() = verify(false)
+    @Test fun aFullReviewUsesLightningAndReanalyzesBothColorsEvenWithAValidCache() = verify(false)
     @Test fun aFailureKeepsCompletedResultsAndNeverClaimsTheWholeGameWasFinished() = verify(true)
     private fun verify(fail: Boolean) {
         val app = ApplicationProvider.getApplicationContext<Application>()
         PlayPreferences(app).save(PlaySettings(color = ColorPreference.WHITE))
         val histories = CopyOnWriteArrayList<List<String>>()
         val profiles = CopyOnWriteArrayList<String>()
+        val limits = CopyOnWriteArrayList<JsonObject>()
         val server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
                     val payload = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
                     histories.add(payload.getValue("position").jsonObject.getValue("moves").jsonArray.map { it.jsonPrimitive.content })
                     profiles.add(payload.getValue("profile").jsonPrimitive.content)
+                    limits.add(payload.getValue("limits").jsonObject)
+                    assertEquals(2, payload.getValue("multiPv").jsonPrimitive.int)
                     if (fail && histories.size == 2) return MockResponse().setResponseCode(500).setBody("test failure")
                     val move = payload.getValue("playedMove").jsonPrimitive.content
                     val item = """{"depth":22,"score":{"type":"cp","value":20},"pv":["$move"]}"""
@@ -68,9 +71,10 @@ class FullReviewTest {
             waitFor(model) { !model.state.value.busy }
             assertEquals(if (fail) 2 else 4, server.requestCount)
             assertEquals((0 until histories.size).map { moves.take(it) }, histories.toList())
-            assertTrue(profiles.all { it == "deep" })
+            assertTrue(profiles.all { it == "lightning" })
+            limits.forEach { assertEquals(22, it.getValue("depth").jsonPrimitive.int); assertEquals(500, it.getValue("maxTimeMs").jsonPrimitive.int) }
             assertEquals(if (fail) 1 else 4, model.state.value.reviewDone)
-            assertEquals("deep", model.state.value.game.reviews.first().analysisProfile)
+            assertEquals("lightning", model.state.value.game.reviews.first().analysisProfile)
             assertEquals(moves, model.state.value.game.moves)
             assertFalse(model.state.value.highlightsOpen)
             if (fail) {
@@ -78,7 +82,42 @@ class FullReviewTest {
                 assertTrue(model.state.value.status.contains("未完成"))
             } else {
                 assertNull(model.state.value.error)
-                assertTrue(model.state.value.game.reviews.all { it.analysisProfile == "deep" })
+                assertTrue(model.state.value.game.reviews.all { it.analysisProfile == "lightning" })
+            }
+        } finally { store.clear(); server.shutdown() }
+    }
+
+    @Test fun selectedReevaluationAndMissingLessonAnalysisAlsoSendTheLightningBudget() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        PlayPreferences(app).save(PlaySettings(color = ColorPreference.WHITE, stockfishToken = "token"))
+        val server = MockWebServer().apply {
+            repeat(2) {
+                val item = """{"depth":22,"score":{"type":"cp","value":20},"pv":["b8c6"]}"""
+                enqueue(MockResponse().setBody("""{"best":$item,"played":$item,"comparison":{"canCompare":true,"commonDepth":22},"engine":{"name":"Stockfish","version":"19"}}"""))
+            }
+            start()
+        }
+        val model = GameViewModel(app, RemoteStockfishClient({ "token" }, server.url("/").toString()))
+        val store = ViewModelStore().apply { put("single", model) }
+        try {
+            waitFor(model) { model.state.value.ready && !model.state.value.busy }
+            val game = GameRecord(moves = listOf("e2e4", "e7e5", "g1f3", "b8c6"), finished = true)
+            model.load(game)
+            model.analyzeSelected()
+            waitFor(model) { !model.state.value.busy }
+            assertNull(model.state.value.error)
+            model.load(game.copy(id = game.id + 1))
+            model.explainSelected()
+            waitFor(model) { !model.state.value.busy }
+            assertNotNull(model.state.value.chosenLesson)
+            assertNull(model.state.value.error)
+            assertEquals(2, server.requestCount)
+            repeat(2) {
+                val payload = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+                assertEquals("lightning", payload.getValue("profile").jsonPrimitive.content)
+                assertEquals(22, payload.getValue("limits").jsonObject.getValue("depth").jsonPrimitive.int)
+                assertEquals(500, payload.getValue("limits").jsonObject.getValue("maxTimeMs").jsonPrimitive.int)
+                assertEquals(game.moves.dropLast(1), payload.getValue("position").jsonObject.getValue("moves").jsonArray.map { it.jsonPrimitive.content })
             }
         } finally { store.clear(); server.shutdown() }
     }

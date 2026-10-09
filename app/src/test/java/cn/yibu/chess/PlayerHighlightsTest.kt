@@ -48,6 +48,9 @@ class PlayerHighlightsTest {
             dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
                     val payload = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+                    assertEquals("lightning", payload.getValue("profile").jsonPrimitive.content)
+                    assertEquals(22, payload.getValue("limits").jsonObject.getValue("depth").jsonPrimitive.int)
+                    assertEquals(500, payload.getValue("limits").jsonObject.getValue("maxTimeMs").jsonPrimitive.int)
                     val moves = payload.getValue("position").jsonObject.getValue("moves").jsonArray.map { it.jsonPrimitive.content }
                     histories.add(moves)
                     val move = payload.getValue("playedMove").jsonPrimitive.content
