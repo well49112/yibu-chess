@@ -79,6 +79,17 @@ enum class Difficulty(val chinese: String, val description: String, val skill: I
 }
 
 @Serializable
+data class ChessComSource(val username: String, val url: String, val white: String, val black: String,
+    val whiteRating: Int? = null, val blackRating: Int? = null, val timeClass: String = "",
+    val timeControl: String = "", val pgn: String = "") {
+    fun opponent(humanWhite: Boolean): String = if (humanWhite) black else white
+    fun playerRating(humanWhite: Boolean): Int? = if (humanWhite) whiteRating else blackRating
+}
+
+@Serializable
+data class OpeningTraining(val courseId: String, val routeId: String, val startPly: Int)
+
+@Serializable
 data class GameRecord(
     val id: Long = GameIds.next(),
     val startedAt: Long = System.currentTimeMillis(),
@@ -97,10 +108,15 @@ data class GameRecord(
     val modelElo: Int? = null,
     val policySeed: Long = 0,
     val lessons: List<MoveLesson> = emptyList(),
+    val source: ChessComSource? = null,
+    val openingTraining: OpeningTraining? = null,
 ) {
     val mode: Difficulty get() = if (difficulty == Difficulty.STRONG) Difficulty.STRONG else Difficulty.MATCHED
-    val opponentLabel: String get() = if (mode == Difficulty.STRONG) "最强 · 不计 Elo"
+    val opponentLabel: String get() = if (source != null) "Chess.com · ${source.opponent(humanWhite)} · Elo ${opponentElo ?: "未提供"}"
+        else if (openingTraining != null) "开局陪练 · Maia · 不计 Elo"
+        else if (mode == Difficulty.STRONG) "最强 · 不计 Elo"
         else "匹配对手 · Elo ${opponentElo ?: 500}${if (rated) "" else " · 不计分"}"
+    fun isPlayerMove(ply: Int): Boolean = (ply % 2 == 1) == humanWhite && ply > (openingTraining?.startPly ?: 0)
 }
 
 /** Generated on request from one legal, deeply searched engine variation. */

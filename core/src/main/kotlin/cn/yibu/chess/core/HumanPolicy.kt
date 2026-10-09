@@ -104,7 +104,7 @@ object HumanSampling {
 class HumanOpponent(private val policy: HumanPolicy) {
     companion object {
         fun prepare(game: GameRecord): GameRecord {
-            if (game.finished || game.mode != Difficulty.MATCHED || game.opponentEngine == "Maia-3 5M") return game
+            if (game.source != null || game.finished || game.mode != Difficulty.MATCHED || game.opponentEngine == "Maia-3 5M") return game
             return game.copy(opponentEngine = "Maia-3 5M", modelElo = game.modelElo ?: HumanSkill.modelElo(game.opponentElo ?: 500),
                 policySeed = if (game.opponentEngine.startsWith("Maia")) game.policySeed else Random.nextLong())
         }
@@ -116,7 +116,7 @@ class HumanOpponent(private val policy: HumanPolicy) {
         val elo = game.modelElo ?: HumanSkill.modelElo(game.opponentElo ?: 500)
         val logits = policy.logits(game.moves, elo, HumanSkill.modelElo(game.playerEloAtStart ?: 500))
         val repeats = if (game.moves.size < 12) recent.asSequence().filter {
-            it.id != game.id && it.mode == Difficulty.MATCHED && (game.moves.size % 2 == 0) != it.humanWhite
+            it.id != game.id && it.source == null && it.mode == Difficulty.MATCHED && (game.moves.size % 2 == 0) != it.humanWhite
         }
             .take(12).filter { it.moves.take(game.moves.size) == game.moves }
             .mapNotNull { it.moves.getOrNull(game.moves.size) }.groupingBy { it }.eachCount() else emptyMap()

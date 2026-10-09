@@ -29,7 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-internal enum class ChessIcon { KNIGHT, REVIEW, LIBRARY, INFO, SETTINGS, FLIP, PLUS, FIRST, PREVIOUS, NEXT, LAST, TRASH, SHARE, FLAG }
+internal enum class ChessIcon { KNIGHT, REVIEW, LIBRARY, TRAIN, INFO, SETTINGS, FLIP, PLUS, FIRST, PREVIOUS, NEXT, LAST, TRASH, SHARE, FLAG }
 
 /** Original, consistent 24-unit line icons; decorative icons have no duplicate spoken label. */
 @Composable
@@ -57,6 +57,10 @@ internal fun LineIcon(icon: ChessIcon, modifier: Modifier = Modifier.size(22.dp)
                 ChessIcon.LIBRARY -> {
                     drawRoundRect(color, Offset(5f, 3f), Size(15f, 18f), androidx.compose.ui.geometry.CornerRadius(2f), style = stroke)
                     line(9f, 3f, 9f, 21f); line(12f, 8f, 17f, 8f); line(12f, 12f, 17f, 12f)
+                }
+                ChessIcon.TRAIN -> {
+                    path(12f to 6f, 8f to 4f, 3f to 4f, 3f to 19f, 8f to 19f, 12f to 21f, 16f to 19f, 21f to 19f, 21f to 4f, 16f to 4f, 12f to 6f)
+                    line(12f, 6f, 12f, 21f); line(6f, 9f, 9f, 10f); line(15f, 10f, 18f, 9f)
                 }
                 ChessIcon.INFO -> {
                     drawCircle(color, 9f, Offset(12f, 12f), style = stroke)

@@ -11,6 +11,9 @@ import cn.yibu.chess.audio.ChessSounds
 import cn.yibu.chess.data.GameRepository
 import cn.yibu.chess.data.PlayPreferences
 import cn.yibu.chess.data.PracticePreferences
+import cn.yibu.chess.data.ImportPreferences
+import cn.yibu.chess.data.ChessComClient
+import cn.yibu.chess.data.OpeningPreferences
 import cn.yibu.chess.diagnostics.RuntimeDiagnostics
 import cn.yibu.chess.diagnostics.AnalysisTimings
 import cn.yibu.chess.diagnostics.AnalysisTiming
@@ -61,6 +64,17 @@ data class AppState(
     val highlightsOpen: Boolean = false,
     val highlights: List<ReviewHighlight> = emptyList(),
     val lastAnalysisTimingId: String? = null,
+    val chessComUsername: String = "",
+    val importing: Boolean = false,
+    val importStatus: String = "",
+    val importError: String? = null,
+    val importCount: Int = 0,
+    val importDuplicates: Int = 0,
+    val importSkipped: Int = 0,
+    val opening: OpeningSession? = null,
+    val openingThinking: Boolean = false,
+    val openingProgress: Set<String> = emptySet(),
+    val trainingSection: Int = 0,
 ) {
     val boardHistory: List<String> get() = when {
         page != 1 -> game.moves
@@ -73,10 +87,14 @@ data class AppState(
     val humanTurn: Boolean get() = (game.moves.size % 2 == 0) == game.humanWhite
 }
 
-class GameViewModel @JvmOverloads constructor(application: Application, remoteClient: RemoteStockfishClient? = null) : AndroidViewModel(application) {
+class GameViewModel @JvmOverloads constructor(application: Application, remoteClient: RemoteStockfishClient? = null,
+    chessCom: ChessComClient? = null) : AndroidViewModel(application) {
     private val repository = GameRepository(application)
     private val preferences = PlayPreferences(application)
     private val practicePreferences = PracticePreferences(application)
+    private val importPreferences = ImportPreferences(application)
+    private val chessComClient = chessCom ?: ChessComClient()
+    private val openingPreferences = OpeningPreferences(application)
     private val sounds = ChessSounds(application)
     private val stockfishClient = remoteClient ?: RemoteStockfishClient({ mutable.value.settings.stockfishToken })
     private val maia = MaiaModel(application)
@@ -84,10 +102,14 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     private val reviewProfile = AnalysisBudget.LIGHTNING.profileName
     private val opponent = Opponent(stockfishClient)
     private val humanOpponent = HumanOpponent(maia)
-    private val mutable = MutableStateFlow(AppState(settings = preferences.read()))
+    private val mutable = MutableStateFlow(AppState(settings = preferences.read(), chessComUsername = importPreferences.username(),
+        openingProgress = openingPreferences.progress()))
     val state = mutable.asStateFlow()
     private var work: Job? = null
     private var liveAnalysis: Job? = null
+    private var importWork: Job? = null
+    private var openingWork: Job? = null
+    private var openingGeneration = 0
     private var generation = 0
     private val persistence = Mutex()
     private val backgroundAttempts = mutableSetOf<Pair<Int, String>>()
@@ -134,6 +156,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         liveAnalysis?.cancel()
         stockfishClient.stop()
         sounds.stop()
+        cancelOpeningWork()
         mutable.update { it.copy(busy = false, analyzing = false, explainingPly = null, kingBreak = null) }
         if (saveSnapshot && snapshot.moves.isNotEmpty()) viewModelScope.launch { persist(snapshot) }
     }
@@ -143,6 +166,135 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         if (mutable.value.page == 0 && mutable.value.kingBreak?.gameId == gameId) playFeedback(SoundCue.SHATTER)
     }
     fun clearError() { mutable.update { it.copy(error = null) } }
+    fun importChessCom(username: String, limit: Int? = 30) {
+        if (mutable.value.importing || mutable.value.transitioning) return
+        val owner = try { ChessComImport.username(username) }
+            catch (e: Exception) { mutable.update { it.copy(importError = e.message) }; return }
+        importPreferences.saveUsername(owner)
+        mutable.update { it.copy(chessComUsername = owner, importing = true, importError = null, importCount = 0,
+            importDuplicates = 0, importSkipped = 0, importStatus = "开始导入…") }
+        importWork = viewModelScope.launch {
+            try {
+                chessComClient.import(owner, limit, { message -> mutable.update { it.copy(importStatus = message) } }) { batch ->
+                    val result = withContext(Dispatchers.IO) { repository.importGames(batch.games) }
+                    mutable.update { it.copy(importCount = it.importCount + result.imported,
+                        importDuplicates = it.importDuplicates + result.duplicates,
+                        importSkipped = it.importSkipped + batch.skipped + result.deleted,
+                        importStatus = "${batch.month} 已保存 · 新增 ${it.importCount + result.imported} 盘",
+                        importError = if (batch.notes.isNotEmpty()) "部分棋局跳过：${batch.notes.joinToString("；")}" else it.importError) }
+                }
+                mutable.update { it.copy(importStatus = "导入完成 · 新增 ${it.importCount} 盘 · 重复 ${it.importDuplicates} 盘 · 跳过 ${it.importSkipped} 盘") }
+                playFeedback(SoundCue.CONFIRM)
+            } catch (e: CancellationException) {
+                mutable.update { it.copy(importStatus = "已停止导入，已保存 ${it.importCount} 盘，下次导入会跳过已有棋局") }
+                throw e
+            } catch (e: Exception) {
+                mutable.update { it.copy(importError = e.message ?: "网络连接失败，请稍后重试",
+                    importStatus = "导入未完成，已保存 ${it.importCount} 盘，可重试") }
+            } finally { mutable.update { it.copy(importing = false) } }
+        }
+    }
+    fun cancelImport() { importWork?.cancel() }
+    fun clearImportStatus() { if (!mutable.value.importing) mutable.update { it.copy(importStatus = "", importError = null) } }
+    private fun cancelOpeningWork() {
+        openingGeneration++
+        openingWork?.cancel()
+        mutable.update { it.copy(openingThinking = false, opening = if (it.opening?.message == "Maia 正在思考…") it.opening.copy(message = "") else it.opening) }
+    }
+    fun trainingSection(index: Int) { mutable.update { it.copy(trainingSection = index.coerceIn(0, 1)) } }
+    fun openCourse(id: String, routeIndex: Int = 0) {
+        if (mutable.value.transitioning || OpeningCourses.all.none { it.id == id && routeIndex in it.routes.indices }) return
+        cancelWork()
+        mutable.update { it.copy(page = 3, trainingSection = 0, opening = OpeningSession(id, routeIndex), practice = null,
+            lessonOpen = false, highlightsOpen = false, variation = emptyList(), error = null) }
+    }
+    fun closeCourse() { cancelOpeningWork(); mutable.update { it.copy(opening = null) } }
+    fun courseRoute(index: Int) {
+        val current = mutable.value.opening ?: return
+        cancelOpeningWork()
+        mutable.update { it.copy(opening = current.changeRoute(index)) }
+    }
+    fun courseSeek(ply: Int) {
+        val current = mutable.value.opening ?: return
+        cancelOpeningWork()
+        val next = current.seek(ply)
+        mutable.update { it.copy(opening = next) }
+        if (next.cursor == next.route.moves.size) markOpening("${next.key}:learn")
+        reviewSound(current.history, next.history)
+    }
+    private fun markOpening(key: String) {
+        val progress = mutable.value.openingProgress + key
+        openingPreferences.save(progress)
+        mutable.update { it.copy(openingProgress = progress) }
+    }
+    fun courseQuiz() { cancelOpeningWork(); mutable.update { it.copy(opening = it.opening?.quiz()) } }
+    fun courseHint() { mutable.update { it.copy(opening = it.opening?.copy(hint = true)) } }
+    fun courseExplore() { cancelOpeningWork(); mutable.update { it.copy(opening = it.opening?.explore()) } }
+    fun courseUndo() {
+        val current = mutable.value.opening ?: return
+        if (current.mode != OpeningMode.FREE || current.freeMoves.size <= current.cursor) return
+        cancelOpeningWork()
+        val next = current.copy(freeMoves = current.freeMoves.dropLast(1), message = "")
+        mutable.update { it.copy(opening = next) }
+        reviewSound(current.history, next.history)
+    }
+    fun courseAnswer(uci: String) {
+        val current = mutable.value.opening ?: return
+        if (mutable.value.openingThinking) return
+        val next = current.answer(uci)
+        mutable.update { it.copy(opening = next) }
+        if (next.history != current.history) reviewSound(current.history, next.history)
+        else if (next.message.isNotBlank()) playFeedback(SoundCue.ILLEGAL)
+        if (current.mode == OpeningMode.QUIZ && current.solvedMove == null && next.solvedMove != null) {
+            markOpening("${next.key}:quiz")
+            playFeedback(SoundCue.CONFIRM)
+        }
+    }
+    fun courseReply() {
+        val current = mutable.value.opening ?: return
+        if (!mutable.value.ready || mutable.value.openingThinking || current.mode != OpeningMode.FREE ||
+            (current.history.size % 2 == 0) == current.course.humanWhite || ChessRules.outcome(current.history) != null) return
+        val token = ++openingGeneration
+        val history = current.history
+        val game = EloRules.newGame(mutable.value.profile, Difficulty.MATCHED, current.course.humanWhite)
+            .copy(moves = history, rated = false)
+        mutable.update { it.copy(openingThinking = true, opening = current.copy(message = "Maia 正在思考…")) }
+        openingWork = viewModelScope.launch {
+            try {
+                val started = SystemClock.elapsedRealtime()
+                val target = OpponentPacing.targetMs()
+                val move = humanOpponent.move(game, mutable.value.games)
+                delay(OpponentPacing.remainingMs(target, SystemClock.elapsedRealtime() - started))
+                currentCoroutineContext().ensureActive()
+                if (token != openingGeneration || mutable.value.page != 3 || mutable.value.opening?.history != history) return@launch
+                mutable.update { it.copy(opening = it.opening?.answer(move)) }
+                reviewSound(history, history + move)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (token == openingGeneration) mutable.update { it.copy(opening = it.opening?.copy(message = "本次回应失败：${e.message}，可重试。")) } }
+            finally { if (token == openingGeneration) mutable.update { it.copy(openingThinking = false) } }
+        }
+    }
+    fun trainOpening() {
+        val current = mutable.value.opening ?: return
+        if (!mutable.value.ready || mutable.value.transitioning || current.history.isEmpty() || ChessRules.outcome(current.history) != null) return
+        val previous = mutable.value.game
+        val game = current.training(mutable.value.profile)
+        cancelWork(false)
+        mutable.update { it.copy(busy = true, transitioning = true, error = null) }
+        viewModelScope.launch {
+            try {
+                if (previous.moves.isNotEmpty() || previous.finished) persist(previous)
+                mutable.update { it.copy(game = game, page = 0, cursor = game.moves.size, opening = null, practice = null,
+                    variation = emptyList(), lessonOpen = false, highlightsOpen = false, highlights = emptyList(),
+                    brilliantNotices = emptyList(), reviewDone = 0, status = "${current.course.title} · 从当前位置陪练，本局不计 Elo") }
+                persist(game)
+                mutable.update { it.copy(busy = false, transitioning = false) }
+                playFeedback(SoundCue.START)
+                if (!mutable.value.humanTurn) advance()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { mutable.update { it.copy(busy = false, transitioning = false, error = "陪练启动失败：${e.message}") } }
+        }
+    }
     fun saveSettings(settings: PlaySettings) {
         if (!mutable.value.ready || mutable.value.transitioning) return
         val saved = settings.copy(stockfishToken = settings.stockfishToken.trim())
@@ -186,7 +338,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
                 val profile = repository.profile()
                 val game = EloRules.newGame(profile, difficulty, humanWhite)
                 mutable.update { it.copy(profile = profile, game = game, page = 0, cursor = 0, variation = emptyList(), lessonOpen = false, kingBreak = null, highlightsOpen = false, highlights = emptyList(),
-                    reviewDone = 0, brilliantNotices = emptyList(), status = "新对局已开始") }
+                    reviewDone = 0, brilliantNotices = emptyList(), opening = null, practice = null, status = "新对局已开始") }
                 persist(game)
                 mutable.update { it.copy(busy = false, transitioning = false) }
                 playFeedback(SoundCue.START)
@@ -277,7 +429,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
                     val current = mutable.value
                     if (token != generation || current.game.id != gameId || current.page != 0 || current.settings.stockfishToken.isBlank()) break
                     val profile = current.settings.analysisBudget.profileName
-                    val missing = (1..current.game.moves.size).filter { ply ->
+                    val missing = ((current.game.openingTraining?.startPly ?: 0) + 1..current.game.moves.size).filter { ply ->
                         (ply to profile) !in backgroundAttempts && current.game.reviews.none {
                             it.ply == ply && it.canReuseDeep(scoringElo(current.game, ply), stockfishClient.engineName, profile)
                         }
@@ -371,7 +523,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         if (page == mutable.value.page) return
         cancelWork()
         mutable.update { it.copy(page = page, cursor = it.game.moves.size, variation = emptyList(), lessonOpen = false,
-            practice = null, kingBreak = null, highlightsOpen = false, status = "引擎已就绪") }
+            practice = null, opening = null, kingBreak = null, highlightsOpen = false, status = "引擎已就绪") }
         if (page == 0) {
             if (!mutable.value.game.finished && !mutable.value.humanTurn) advance()
             scheduleLiveAnalysis()
@@ -381,7 +533,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         if (mutable.value.transitioning) return
         cancelWork()
         mutable.update { it.copy(game = HumanOpponent.prepare(game), page = 1, cursor = game.moves.size, variation = emptyList(), lessonOpen = false,
-            practice = null, kingBreak = null, highlightsOpen = false, highlights = emptyList(), brilliantNotices = emptyList(), error = null) }
+            practice = null, opening = null, kingBreak = null, highlightsOpen = false, highlights = emptyList(), brilliantNotices = emptyList(), error = null) }
     }
     fun cursor(ply: Int) {
         val before = mutable.value.boardHistory
@@ -494,13 +646,13 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         }
     }
     fun closeLesson() { mutable.update { it.copy(lessonOpen = false, variation = emptyList(), variationStep = 0,
-        page = if (it.practice != null) 2 else it.page) } }
+        page = if (it.practice != null) 3 else it.page) } }
     fun startPractice() {
         val state = mutable.value
         if (!state.ready || state.busy || state.transitioning || state.practiceQuestions.isEmpty()) return
         val questions = MistakePractice.queue(state.practiceQuestions, state.practiceProgress, System.currentTimeMillis())
         cancelWork()
-        mutable.update { it.copy(page = 2, practice = PracticeSession(questions), error = null,
+        mutable.update { it.copy(page = 3, trainingSection = 1, opening = null, practice = PracticeSession(questions), error = null,
             lessonOpen = false, highlightsOpen = false, variation = emptyList()) }
     }
     fun closePractice() { mutable.update { it.copy(practice = null) } }
@@ -589,7 +741,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     private fun reviewGame(guided: Boolean) {
         if (!mutable.value.ready || mutable.value.busy || mutable.value.page != 1 || mutable.value.game.moves.isEmpty()) return
         val current = mutable.value.game
-        val plies = (1..current.moves.size).filter { !guided || (it % 2 == 1) == current.humanWhite }
+        val plies = (1..current.moves.size).filter { !guided || current.isPlayerMove(it) }
         val needsSearch = !guided || plies.any { ply ->
             current.reviews.find { it.ply == ply }?.canReuseDeep(scoringElo(current, ply), stockfishClient.engineName) != true
         }
@@ -709,6 +861,7 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
     }
     fun pauseForBackground() {
         sounds.pause()
+        cancelOpeningWork()
         mutable.update { it.copy(kingBreak = null) }
         if ((mutable.value.busy || mutable.value.analyzing) && !mutable.value.transitioning) { cancelWork(); mutable.update { it.copy(status = "已暂停计算，棋谱已保存") } }
     }
@@ -724,5 +877,5 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         "1-0" -> "白方获胜"; "0-1" -> "黑方获胜"; "1/2-1/2" -> "和棋"; else -> "进行中"
     }
     suspend fun testStockfishConnection(token: String): Result<String> = stockfishClient.checkHealth(token)
-    override fun onCleared() { work?.cancel(); liveAnalysis?.cancel(); stockfishClient.stop(); sounds.release(); super.onCleared() }
+    override fun onCleared() { work?.cancel(); liveAnalysis?.cancel(); importWork?.cancel(); openingWork?.cancel(); stockfishClient.stop(); sounds.release(); super.onCleared() }
 }

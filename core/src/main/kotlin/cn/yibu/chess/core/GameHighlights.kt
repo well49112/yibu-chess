@@ -22,7 +22,7 @@ object GameHighlights {
     fun build(game: GameRecord): List<ReviewHighlight> {
         if (game.moves.isEmpty()) return emptyList()
         val reviews = game.reviews.filter { it.ply in 1..game.moves.size && it.uci == game.moves[it.ply - 1] &&
-            it.moverWhite == game.humanWhite && !it.provisional && it.grade !in listOf(Grade.UNSTABLE, Grade.FORCED) &&
+            game.isPlayerMove(it.ply) && !it.provisional && it.grade !in listOf(Grade.UNSTABLE, Grade.FORCED) &&
             it.algorithmVersion == 3 && it.best.depth >= 12 && it.best.depth == it.played.depth }.distinctBy { it.ply }
         fun weight(review: MoveReview): Double = review.pointsLost * 100 + when {
             review.grade == Grade.BRILLIANT -> 100.0

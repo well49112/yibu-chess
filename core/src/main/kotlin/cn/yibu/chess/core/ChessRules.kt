@@ -160,6 +160,7 @@ object ChessRules {
             "对手可走 ${san(history + played.pv[0], played.pv[1])}，吃掉你的${pieceChinese(captured)}。点击变化查看后续。" else null
     }
     fun pgn(game: GameRecord): String {
+        game.source?.pgn?.takeIf { it.isNotBlank() }?.let { return it }
         val date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.ROOT).format(java.util.Date(game.startedAt))
         val human = "Player"
         val engine = "${game.opponentEngine} (${game.difficulty.name})"

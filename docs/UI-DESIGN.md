@@ -79,3 +79,21 @@ UiLayoutTest 导出实际 Compose 渲染到 artifacts/ui-0.5.0，覆盖 412dp �
 <img src="screenshots/review-analysis-0.5.0.png" width="260" alt="复盘分析卡"> <img src="screenshots/library-0.5.0.png" width="260" alt="棋谱列表">
 
 <img src="screenshots/review-lesson-why-0.5.0.png" width="260" alt="单步走法原因"> <img src="screenshots/review-lesson-plan-0.5.0.png" width="260" alt="单步后续思路">
+
+
+## 1.0.0 信息结构整理
+
+| Before | After | Why |
+| --- | --- | --- |
+| 棋谱页上方堆叠弱点、错题入口，列表需要向下寻找 | 棋谱只展示标题、导入动作、来源筛选和棋局列表 | 导入、找棋谱、打开和删除是这里的主要任务 |
+| 新功能都加入同一页 | 底部新增训练；分为开局课程 / 我的训练 | 开局学习与个人训练各有清晰入口，不与棋谱管理争夺空间 |
+| 导入说明和表单永久占据棋谱页 | 右上角导入按钮打开短表单；仅工作期间/结果出现时显示可收起的状态条 | 首次操作有说明，之后直接使用记住的用户名 |
+| 学开局要在文字和棋盘间往返 | 固定棋盘、可滚动的逐步说明、手动导航和练习动作 | 当前局面、为什么走和下一步行动同时可见 |
+| 白黑课程一次展示 10 张卡片 | 按执白 / 执黑切换，每组 5 套 | 先选自己的颜色，再选择课程 |
+
+使用原有绿色、米白棋盘与反馈。常用按钮保持即时反馈，不自动播放，不添加静音开关。320dp 小屏针对性验证导入、主线步进、白黑作答、自由试走和撤回；界面截图使用 Compose 原生渲染。
+
+
+<img src="ui-1.0.0/library-clean.png" width="240" alt="简化后的棋谱页"> <img src="ui-1.0.0/chesscom-import.png" width="240" alt="记住用户名的导入表单">
+
+<img src="ui-1.0.0/opening-courses.png" width="240" alt="开局课程列表"> <img src="ui-1.0.0/opening-answer.png" width="240" alt="开局练习答后解释与棋盘">

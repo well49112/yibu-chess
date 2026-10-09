@@ -64,7 +64,7 @@ class PracticeViewModelTest {
             waitFor(model) { !model.state.value.busy && model.state.value.lessonOpen }
             assertNotNull(model.state.value.practice)
             model.closeLesson()
-            assertEquals(2, model.state.value.page)
+            assertEquals(3, model.state.value.page)
             assertTrue(model.state.value.practice!!.finished)
             model.practiceNext()
             assertNull(model.state.value.practice!!.current)

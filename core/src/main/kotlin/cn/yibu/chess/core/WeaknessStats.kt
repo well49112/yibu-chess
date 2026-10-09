@@ -42,7 +42,7 @@ object WeaknessStats {
             val reports = games.map { game ->
                 val saved = cache[game.id]
                 val report = saved?.takeIf { (old, _) -> old.humanWhite == game.humanWhite &&
-                    old.moves == game.moves && old.reviews == game.reviews }?.second ?: WeaknessStats.build(listOf(game))
+                    old.moves == game.moves && old.reviews == game.reviews && old.openingTraining == game.openingTraining }?.second ?: WeaknessStats.build(listOf(game))
                 cache[game.id] = game to report
                 report
             }
@@ -56,7 +56,7 @@ object WeaknessStats {
 
     fun confirmed(game: GameRecord, review: MoveReview): Boolean =
         review.ply in 1..game.moves.size && review.uci == game.moves[review.ply - 1] &&
-            review.moverWhite == game.humanWhite && !review.provisional &&
+            game.isPlayerMove(review.ply) && !review.provisional &&
             review.grade != Grade.UNSTABLE && review.algorithmVersion == 3 &&
             review.best.depth >= 12 && review.best.depth == review.played.depth &&
             review.best.pv.firstOrNull() in ChessRules.legal(game.moves.take(review.ply - 1)) &&
@@ -81,7 +81,7 @@ object WeaknessStats {
         val groups = findings.groupBy({ it.first }, { it.second }).map { (type, examples) -> WeaknessGroup(type, examples) }
             .sortedWith(compareByDescending<WeaknessGroup> { it.count }.thenBy { it.type.ordinal })
         return WeaknessReport(games.size, analyzedGames,
-            games.sumOf { game -> (1..game.moves.size).count { (it % 2 == 1) == game.humanWhite } },
+            games.sumOf { game -> (1..game.moves.size).count(game::isPlayerMove) },
             confirmedMoves, groups)
     }
 

@@ -36,7 +36,8 @@ object EloRules {
         "1/2-1/2" -> 0.5
         else -> null
     }
-    fun eligible(game: GameRecord): Boolean = game.finished && game.rated && game.difficulty == Difficulty.MATCHED &&
+    fun eligible(game: GameRecord): Boolean = game.source == null && game.openingTraining == null &&
+        game.finished && game.rated && game.difficulty == Difficulty.MATCHED &&
         game.opponentElo != null && score(game) != null
     fun calculate(profile: PlayerProfile, opponent: Int, score: Double): RatingChange {
         require(score in listOf(0.0, 0.5, 1.0))

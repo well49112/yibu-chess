@@ -45,7 +45,7 @@ internal fun PracticeWorkspace(session: PracticeSession, onClose: () -> Unit, on
             Text("本轮练习完成", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             Text("独立答对 ${session.independent} 题 · 辅助完成 ${session.assisted} 题", modifier = Modifier.padding(vertical = 16.dp))
             Text("独立答对后逐步间隔 1、3、7、14 天；用提示、看答案或多次尝试的题十分钟后再练。", color = Muted, lineHeight = 22.sp)
-            TextButton(onClick = feedbackClick(onClose)) { Text("返回棋谱") }
+            TextButton(onClick = feedbackClick(onClose)) { Text("返回训练") }
         }
         return
     }
@@ -70,7 +70,7 @@ internal fun PracticeWorkspace(session: PracticeSession, onClose: () -> Unit, on
                     Text("错题练习 ${session.index + 1} / ${session.questions.size}", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     Text("你执${if (question.humanWhite) "白" else "黑"} · 回到第 ${question.ply} 步之前", color = Muted, fontSize = 12.sp)
                 }
-                TextButton(onClick = feedbackClick(onClose)) { Text("返回棋谱", fontSize = 12.sp) }
+                TextButton(onClick = feedbackClick(onClose)) { Text("返回训练", fontSize = 12.sp) }
             }
             Box(Modifier.align(Alignment.CenterHorizontally).size(boardSize).background(Ink, RoundedCornerShape(15.dp)).padding(4.dp)) {
                 ChessBoard(fen, !question.humanWhite, selected, if (session.finished) emptySet() else targets,

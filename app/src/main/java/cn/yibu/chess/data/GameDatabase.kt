@@ -75,6 +75,7 @@ abstract class GameDatabase : RoomDatabase() {
 }
 
 data class SaveResult(val game: GameRecord?, val profile: PlayerProfile)
+data class ImportSaveResult(val imported: Int, val duplicates: Int, val deleted: Int)
 
 class GameRepository(context: Context, private val database: GameDatabase = GameDatabase.get(context)) {
     private val dao = database.games()
@@ -89,6 +90,27 @@ class GameRepository(context: Context, private val database: GameDatabase = Game
     val profiles = ratings.observeProfile().map { it?.value() ?: PlayerProfile() }
     suspend fun profile(): PlayerProfile = ratings.profile()?.value() ?: PlayerProfile()
     suspend fun latest(): GameRecord? = dao.latest()?.let { runCatching { json.decodeFromString<GameRecord>(it.payload) }.getOrNull() }
+    suspend fun importGames(games: List<GameRecord>): ImportSaveResult = database.withTransaction {
+        var imported = 0
+        var duplicates = 0
+        var deleted = 0
+        for (game in games) {
+            val source = requireNotNull(game.source)
+            require(game.finished && !game.rated && game.ratingChange == null)
+            require(game.id == ChessComImport.sourceId(source.url))
+            if (ratings.deleted(game.id) != null) { deleted++; continue }
+            val previous = dao.find(game.id)
+            if (previous != null) {
+                require(json.decodeFromString<GameRecord>(previous.payload).source?.url?.replace("https://www.", "https://") ==
+                    source.url.replace("https://www.", "https://")) { "棋谱编号冲突，该批次未写入" }
+                duplicates++
+                continue // Keep existing reviews and lessons intact.
+            }
+            dao.save(StoredGame(game.id, game.startedAt, json.encodeToString(game)))
+            imported++
+        }
+        ImportSaveResult(imported, duplicates, deleted)
+    }
     suspend fun save(game: GameRecord): SaveResult = database.withTransaction {
         var profile = profile()
         // Cancelled analysis may finish after a deletion; it must never restore the record.
