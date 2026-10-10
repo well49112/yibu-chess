@@ -31,7 +31,7 @@ class OpeningImportUiTest {
         val col = if (flipped) 7 - i % 8 else i % 8
         val row = if (flipped) i / 8 else 7 - i / 8
         compose.onNodeWithContentDescription("国际象棋棋盘，${if (flipped) "黑方" else "白方"}视角")
-            .performScrollTo().performTouchInput { click(Offset((col + .5f) * width / 8f, (row + .5f) * height / 8f)) }
+            .performTouchInput { click(Offset((col + .5f) * width / 8f, (row + .5f) * height / 8f)) }
     }
     @Test fun libraryContainsOnlyGamesAndImportWithSavedUsernameAndNoTrainingCards() {
         val vm = model()
@@ -75,16 +75,12 @@ class OpeningImportUiTest {
     }
     private fun workspace(initial: OpeningSession) {
         val state = mutableStateOf(initial)
-        compose.setContent { ChessTheme { Column(Modifier.fillMaxSize()) {
-            Spacer(Modifier.height(70.dp))
-            Box(Modifier.weight(1f).padding(horizontal = 16.dp)) {
-                OpeningWorkspace(state.value, false, true, emptySet(), emptyList(), {},
-                    { state.value = state.value.changeRoute(it) }, { state.value = state.value.seek(it) },
-                    { state.value = state.value.quiz() }, { state.value = state.value.copy(hint = true) },
-                    { state.value = state.value.explore() }, { state.value = state.value.answer(it) },
-                    { state.value = state.value.copy(freeMoves = state.value.freeMoves.dropLast(1)) }, {}, {}, { _, _ -> })
-            }
-            Spacer(Modifier.height(80.dp))
+        compose.setContent { ChessTheme { Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            OpeningWorkspace(state.value, false, true, emptySet(), emptyList(), {},
+                { state.value = state.value.changeRoute(it) }, { state.value = state.value.seek(it) },
+                { state.value = state.value.quiz() }, { state.value = state.value.copy(hint = true) },
+                { state.value = state.value.explore() }, { state.value = state.value.answer(it) },
+                { state.value = state.value.copy(freeMoves = state.value.freeMoves.dropLast(1)) }, {}, {}, { _, _ -> })
         } } }
     }
     @Test fun manualStepsShowAuthoredReasonsAndWhiteQuizExplainsCastlingAfterBoardAnswer() {
@@ -96,7 +92,7 @@ class OpeningImportUiTest {
         compose.onNodeWithText("分支练习").assertIsDisplayed().performClick()
         compose.onNodeWithTag("opening-answer").assertDoesNotExist()
         tap("e1", false); tap("g1", false)
-        compose.onNodeWithTag("opening-answer").performScrollTo().assertTextContains("王放到g1", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("opening-answer").assertTextContains("王放到g1", substring = true).assertIsDisplayed()
         compose.featureScreenshot("opening-answer")
         compose.onNodeWithTag("opening-tools").performClick()
         compose.onNodeWithText("自由试走").performClick()

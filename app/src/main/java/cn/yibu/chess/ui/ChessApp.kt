@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -92,25 +93,28 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
     val targets = remember(selected, legal) { legal.filter { it.take(2) == selected?.let(ChessRules::squareName) }.map { ChessRules.squareIndex(it.substring(2, 4)) }.toSet() }
     ChessTheme {
         Scaffold(containerColor = Background, bottomBar = {
-            Surface(color = Background) {
-                Column {
-                    HorizontalDivider(color = Line.copy(alpha = .6f))
-                    NavigationBar(containerColor = Background, tonalElevation = 0.dp) {
-                        listOf(Triple("对弈", ChessIcon.KNIGHT, 0), Triple("复盘", ChessIcon.REVIEW, 1),
-                            Triple("训练", ChessIcon.TRAIN, 3), Triple("棋谱", ChessIcon.LIBRARY, 2)).forEach { (name, icon, page) ->
-                            NavigationBarItem(selected = state.page == page, onClick = feedbackClick { model.page(page) },
-                                icon = { LineIcon(icon) }, label = { Text(name, fontSize = 12.sp) },
-                                colors = NavigationBarItemDefaults.colors(indicatorColor = Soft,
-                                    selectedIconColor = Accent, selectedTextColor = Accent,
-                                    unselectedIconColor = Muted, unselectedTextColor = Muted))
+            if (state.page != 3 || state.opening == null) {
+                Surface(color = Background) {
+                    Column {
+                        HorizontalDivider(color = Line.copy(alpha = .6f))
+                        NavigationBar(containerColor = Background, tonalElevation = 0.dp) {
+                            listOf(Triple("对弈", ChessIcon.KNIGHT, 0), Triple("复盘", ChessIcon.REVIEW, 1),
+                                Triple("训练", ChessIcon.TRAIN, 3), Triple("棋谱", ChessIcon.LIBRARY, 2)).forEach { (name, icon, page) ->
+                                NavigationBarItem(selected = state.page == page, onClick = feedbackClick { model.page(page) },
+                                    icon = { LineIcon(icon) }, label = { Text(name, fontSize = 12.sp) },
+                                    colors = NavigationBarItemDefaults.colors(indicatorColor = Soft,
+                                        selectedIconColor = Accent, selectedTextColor = Accent,
+                                        unselectedIconColor = Muted, unselectedTextColor = Muted))
+                            }
                         }
                     }
                 }
             }
         }) { padding ->
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 560.dp).fillMaxSize().padding(horizontal = 16.dp)) {
-                    AppHeader(state, model) { aboutDialog = true }
+                Column(Modifier.widthIn(max = 560.dp).fillMaxSize().padding(horizontal = 16.dp)
+                    .padding(top = if (state.page == 0) 0.dp else 8.dp)) {
+                    if (state.page == 0) AppHeader(state, model) { aboutDialog = true }
                     if (state.page == 3 && state.practice != null) {
                         Box(Modifier.weight(1f)) {
                             PracticeWorkspace(state.practice, model::closePractice, model::practiceAnswer, model::practiceHint,
@@ -289,7 +293,7 @@ internal fun ChessScreen(state: AppState, model: GameViewModel) {
 
 @Composable
 private fun AppHeader(state: AppState, model: GameViewModel, onAbout: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 14.dp).testTag("app-header"), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(38.dp).background(Accent, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
             LineIcon(ChessIcon.KNIGHT, Modifier.size(25.dp), Color.White)
         }

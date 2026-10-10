@@ -124,3 +124,19 @@ UiLayoutTest 导出实际 Compose 渲染到 artifacts/ui-0.5.0，覆盖 412dp �
 <img src="ui-1.0.2/interactive-course.png" width="240" alt="与对弈同宽的大棋盘互动课"> <img src="ui-1.0.2/course-answer.png" width="240" alt="亲手走棋后的具体解释与继续动作">
 
 <img src="ui-1.0.2/course-complete.png" width="240" alt="课末再练后的总结"> <img src="ui-1.0.2/course-routes-small.png" width="240" alt="小屏具名路线选择与旧学习记录">
+
+## 1.0.3 教学一屏与页面顶部
+
+| Before | After | Why |
+| --- | --- | --- |
+| 四个页面都有弈步、Elo、信息和新局栏 | 只在对弈保留，其他三个页面直接进入内容 | 复盘、训练、棋谱获得更多空间 |
+| 教学同时占用品牌栏和底部四页导航 | 课程使用专注布局，保留返回与路线入口；返回列表恢复导航 | 为完整大棋盘与当前讲解留足空间 |
+| 大棋盘下方的目标、提示、解释需要上下滚动 | 固定棋盘，剩余空间放当前说明，底部固定主要操作 | 学习过程中不需要找文字，连续作答位置稳定 |
+| 目标和操作说明在多个位置重复 | 每个阶段只显示当前目标、反馈或总结；答后原因全文保留 | 删去重复信息而非裁掉具体走棋原因 |
+| 字号固定，小屏文字可能超出剩余空间 | 测量实际文字换行，从 14、13、12sp 选择能完整显示的正文大小 | 在常用手机与小屏下保持内容完整，优先保留棋盘尺寸 |
+
+没有新增自动播放或推进。逐步讲解、自由试走、陪练与导入实战例子在“更多”中；路线选择对话框仍按名称列出四条路线。主要教学页面无滚动容器，提示与错误反馈不会移动棋盘。
+
+<img src="ui-1.0.3/interactive-course.png" width="240" alt="一屏教学，大棋盘与课程操作"> <img src="ui-1.0.3/course-answer.png" width="240" alt="固定棋盘下的完整答后讲解">
+
+<img src="ui-1.0.3/teaching-small-screen.png" width="240" alt="320dp 小屏完整教学"> <img src="ui-1.0.3/teaching-large-font.png" width="240" alt="较大字体手机教学">

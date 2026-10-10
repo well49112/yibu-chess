@@ -30,20 +30,16 @@ class OpeningLessonUiTest {
         val i = ChessRules.squareIndex(square)
         val col = if (flipped) 7 - i % 8 else i % 8
         val row = if (flipped) i / 8 else 7 - i / 8
-        board(flipped).performScrollTo().performTouchInput { click(Offset((col + .5f) * width / 8f, (row + .5f) * height / 8f)) }
+        board(flipped).performTouchInput { click(Offset((col + .5f) * width / 8f, (row + .5f) * height / 8f)) }
     }
     private fun workspace(initial: OpeningSession) = mutableStateOf(initial).also { state ->
-        compose.setContent { ChessTheme { Column(Modifier.fillMaxSize()) {
-            Spacer(Modifier.height(70.dp))
-            Box(Modifier.weight(1f).padding(horizontal = 16.dp)) {
-                OpeningWorkspace(state.value, false, true, setOf("italian:main:learn"), emptyList(), {},
-                    { state.value = state.value.changeRoute(it) }, { state.value = state.value.seek(it) },
-                    { state.value = state.value.quiz() }, { state.value = state.value.lessonHint() },
-                    { state.value = state.value.explore() }, { state.value = state.value.answer(it) },
-                    { state.value = state.value.copy(freeMoves = state.value.freeMoves.dropLast(1)) }, {}, {}, { _, _ -> },
-                    { state.value = state.value.continueLesson() }, { state.value = state.value.guided() }, { state.value = state.value.showLessonMove() })
-            }
-            Spacer(Modifier.height(80.dp))
+        compose.setContent { ChessTheme { Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            OpeningWorkspace(state.value, false, true, setOf("italian:main:learn"), emptyList(), {},
+                { state.value = state.value.changeRoute(it) }, { state.value = state.value.seek(it) },
+                { state.value = state.value.quiz() }, { state.value = state.value.lessonHint() },
+                { state.value = state.value.explore() }, { state.value = state.value.answer(it) },
+                { state.value = state.value.copy(freeMoves = state.value.freeMoves.dropLast(1)) }, {}, {}, { _, _ -> },
+                { state.value = state.value.continueLesson() }, { state.value = state.value.guided() }, { state.value = state.value.showLessonMove() })
         } } }
     }
     @Test fun teachingBoardHasExactlyThePlayBoardWidthOnTheActualPhoneLayout() {
