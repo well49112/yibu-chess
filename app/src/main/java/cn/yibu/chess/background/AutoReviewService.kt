@@ -70,7 +70,8 @@ class AutoReviewService : Service() {
                     override fun activeGameId() = AutoReview.activeGameId
                     override fun authFailed(token: String) = AutoReview.authFailed(this@AutoReviewService, token)
                     override fun searching(value: Boolean) {
-                        if (value) wakeLock.acquire(60_000) else if (wakeLock.isHeld) wakeLock.release()
+                        if (value) wakeLock.acquire((RemoteStockfishClient.BATCH_TIMEOUT_SECONDS + 10) * 1000)
+                        else if (wakeLock.isHeld) wakeLock.release()
                     }
                     override fun publish(state: AutoReviewState) {
                         AutoReview.publish(state)

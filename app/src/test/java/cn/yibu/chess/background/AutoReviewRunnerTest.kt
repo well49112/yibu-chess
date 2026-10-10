@@ -5,6 +5,7 @@ import androidx.room.Room
 import cn.yibu.chess.core.*
 import cn.yibu.chess.data.*
 import cn.yibu.chess.engine.RemoteStockfishClient
+import cn.yibu.chess.engine.BatchApiFixture
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.mockwebserver.*
@@ -32,6 +33,8 @@ class AutoReviewRunnerTest {
     private var online = true
     private var interactive = false
     private var importing = false
+    private var paused = false
+    private var activeId: Long? = null
     private var auth = false
     private var waiting: (suspend (Long) -> Unit)? = null
     private val waits = mutableListOf<Long>()
@@ -39,10 +42,10 @@ class AutoReviewRunnerTest {
         override val revision get() = this@AutoReviewRunnerTest.revision
         override fun settings() = PlaySettings(stockfishToken = "token")
         override fun online() = online
-        override fun paused() = false
+        override fun paused() = paused
         override fun interactive() = interactive
         override fun importing() = importing
-        override fun activeGameId(): Long? = null
+        override fun activeGameId(): Long? = activeId
         override fun authFailed(token: String) { auth = true }
         override fun searching(value: Boolean) {}
         override fun publish(state: AutoReviewState) { states += state }
@@ -59,14 +62,9 @@ class AutoReviewRunnerTest {
     private fun runner() = AutoReviewRunner(app, repo, client(), AutoReviewRetries(app), control, { now }, idleGraceMs = 0)
     private fun game(plies: Int = 3) = GameRecord(moves = listOf("e2e4", "e7e5", "g1f3").take(plies), finished = true)
     private fun response(request: RecordedRequest, comparable: Boolean = true): MockResponse {
-        val body = Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject
-        assertEquals("lightning", body["profile"]!!.jsonPrimitive.content)
-        assertEquals(22, body["limits"]!!.jsonObject["depth"]!!.jsonPrimitive.int)
-        assertEquals(500, body["limits"]!!.jsonObject["maxTimeMs"]!!.jsonPrimitive.int)
-        val move = body["playedMove"]!!.jsonPrimitive.content
-        val ev = """{"depth":22,"score":{"type":"cp","value":20,"bound":"exact"},"pv":["$move"]}"""
-        return MockResponse().setBody("""{"best":$ev,"played":$ev,"comparison":{"canCompare":$comparable,"commonDepth":22},"engine":{"name":"Stockfish","version":"19"}}""")
+        return BatchApiFixture.response(request, comparable)
     }
+
     private suspend fun until(predicate: suspend () -> Boolean) = withTimeout(10_000) { while (!predicate()) delay(10) }
     @Test fun importedLocalUnfinishedAndPresetGamesAreCompletedAndRestartReusesTheCache() = runBlocking {
         val imported = ChessComImport.parse("""[White "Me"]
@@ -78,18 +76,18 @@ class AutoReviewRunnerTest {
         val course = game(2).copy(openingTraining = OpeningTraining("italian", "main", 2))
         repo.save(local); repo.save(pending); repo.save(course)
         runner().run()
-        assertEquals(9, server.requestCount)
+        assertEquals(13, server.requestCount)
         assertTrue(repo.all().all { AutoAnalysis.missing(it).isEmpty() })
         assertEquals(PlayerProfile(), repo.profile())
         val saved = repo.all().associate { it.id to it.reviews }
         runner().run()
-        assertEquals(9, server.requestCount); assertEquals(saved, repo.all().associate { it.id to it.reviews })
+        assertEquals(13, server.requestCount); assertEquals(saved, repo.all().associate { it.id to it.reviews })
         assertEquals(0, states.last().pendingSteps)
     }
     @Test fun cancellingTheWorkerKeepsTheFirstResultAndANewWorkerResumesOnlyMissingSteps() = runBlocking {
-        val calls = AtomicInteger(); val blocked = CountDownLatch(1); val release = CountDownLatch(1)
+        val blocked = CountDownLatch(1); val release = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() { override fun dispatch(request: RecordedRequest): MockResponse {
-            if (calls.incrementAndGet() == 2) { blocked.countDown(); release.await(10, TimeUnit.SECONDS) }
+            if (request.path == "/sf/v1/analyze-move" && Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject["playedMove"]?.jsonPrimitive?.content == "e7e5") { blocked.countDown(); release.await(10, TimeUnit.SECONDS) }
             return response(request)
         } }
         val game = game(); repo.save(game)
@@ -101,15 +99,15 @@ class AutoReviewRunnerTest {
             job.cancelAndJoin(); release.countDown()
             runner().run()
             assertEquals(first, repo.find(game.id)!!.reviews.first { it.ply == 1 })
-            assertEquals(3, repo.find(game.id)!!.reviews.size); assertEquals(4, server.requestCount)
+            assertEquals(3, repo.find(game.id)!!.reviews.size); assertEquals(7, server.requestCount)
         } finally { job.cancelAndJoin(); release.countDown() }
     }
     @Test fun unstableResultsAreDeferredWithoutBlockingOtherStepsAndLaterRetried() = runBlocking {
         val calls = AtomicInteger()
-        server.dispatcher = object : Dispatcher() { override fun dispatch(request: RecordedRequest) = response(request, calls.incrementAndGet() != 1) }
+        server.dispatcher = object : Dispatcher() { override fun dispatch(request: RecordedRequest) = response(request, request.path == "/sf/v1/review" || calls.incrementAndGet() != 1) }
         val game = game(); repo.save(game)
         runner().run()
-        assertEquals(4, server.requestCount)
+        assertEquals(6, server.requestCount)
         assertEquals(listOf(30_000L), waits)
         assertTrue(AutoAnalysis.missing(repo.find(game.id)!!).isEmpty())
         assertTrue(states.any { it.message.contains("等待重试") })
@@ -120,7 +118,7 @@ class AutoReviewRunnerTest {
             interactive = false; repo.save(game(1)); revision++; waiting = null
         } }
         runner().run()
-        assertEquals(3, server.requestCount)
+        assertEquals(5, server.requestCount)
         assertTrue(states.any { it.message.contains("网络") }); assertTrue(states.any { it.message.contains("手动复盘") })
     }
     @Test fun invalidTokenStopsWithoutLosingAnySavedGameOrSendingFurtherRequests() = runBlocking {
@@ -140,6 +138,31 @@ class AutoReviewRunnerTest {
         try { assertTrue(entered.await(3, TimeUnit.SECONDS)); repo.delete(game.id); release.countDown(); job.join()
             assertNull(repo.find(game.id)); assertEquals(PlayerProfile(), repo.profile())
         } finally { release.countDown(); job.cancelAndJoin() }
+    }
+    @Test fun activeUnfinishedGameUsesOnlyTheNewStepInsteadOfRepeatedFullBatch() = runBlocking {
+        val game = game().copy(finished = false); activeId = game.id; repo.save(game)
+        runner().run()
+        assertEquals(3, server.requestCount)
+        repeat(3) { assertEquals("/sf/v1/analyze-move", server.takeRequest().path) }
+        assertTrue(AutoAnalysis.missing(repo.find(game.id)!!).isEmpty())
+    }
+    @Test fun interactiveWorkPreemptsABlockedBatchAndReleasesTheSharedGate() = runBlocking {
+        repo.save(game())
+        server.dispatcher = object : Dispatcher() { override fun dispatch(request: RecordedRequest) = MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE) }
+        val job = launch(Dispatchers.IO) { runner().run() }
+        try {
+            withContext(Dispatchers.IO) { assertNotNull(server.takeRequest(2, TimeUnit.SECONDS)) }
+            interactive = true
+            until { states.any { it.message.contains("手动复盘") } }
+            withTimeout(1000) {
+                CloudSearchGate.mutex.lock()
+                CloudSearchGate.mutex.unlock()
+            }
+            assertEquals(1, server.requestCount)
+            assertTrue(repo.all().single().reviews.isEmpty())
+            paused = true
+            job.cancelAndJoin()
+        } finally { job.cancelAndJoin() }
     }
     @Test fun concurrentOldSnapshotsAndNewMovesKeepSavedAnalysisLessonsAndSettledElo() = runBlocking {
         val game = EloRules.newGame(PlayerProfile(), humanWhite = true).copy(moves = game(2).moves, finished = true, result = "1-0")

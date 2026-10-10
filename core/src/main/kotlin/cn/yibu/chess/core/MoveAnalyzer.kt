@@ -25,9 +25,16 @@ class MoveAnalyzer(private val service: StockfishService) {
     constructor(engine: ChessEngine) : this(EngineToServiceAdapter(engine))
 
     suspend fun analyze(history: List<String>, uci: String, deep: Boolean, playerElo: Int = 500, profileOverride: String? = null): MoveReview {
+        require(uci in ChessRules.legal(history))
+        val analysis = service.analyzeMove(history, uci, deep, profileOverride)
+        return fromAnalysis(history, uci, analysis, deep, playerElo, profileOverride)
+    }
+
+    /** Batch and single-position requests share the same rating and explanation rules. */
+    fun fromAnalysis(history: List<String>, uci: String, analysis: RemoteMoveAnalysis, deep: Boolean,
+        playerElo: Int = 500, profileOverride: String? = null): MoveReview {
         val legal = ChessRules.legal(history)
         require(uci in legal)
-        val analysis = service.analyzeMove(history, uci, deep, profileOverride)
         var best = analysis.best
         var played = analysis.played
         // Terminal game outcomes override statistical WDL, including mandatory draws.

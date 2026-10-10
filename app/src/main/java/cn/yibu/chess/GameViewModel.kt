@@ -744,17 +744,43 @@ class GameViewModel @JvmOverloads constructor(application: Application, remoteCl
         }
         val token = generation
         mutable.update { it.copy(busy = true, reviewDone = 0, error = null, lessonOpen = false, highlightsOpen = false, variation = emptyList(),
-            status = if (guided) "正在寻找本局关键点…" else "正在用 lightning 逐步复评整盘棋…") }
+            status = if (guided) "正在寻找本局关键点…" else "正在用 lightning 批量复评整盘棋…") }
         work = viewModelScope.launch {
             try {
                 val game = mutable.value.game
-                for ((index, ply) in plies.withIndex()) {
-                    currentCoroutineContext().ensureActive()
-                    val review = mutable.value.game.reviews.find { it.ply == ply }
-                    if (!guided || review?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true)
-                        analyzePly(ply, true, token, profileOverride = reviewProfile)
-                    mutable.update { it.copy(reviewDone = index + 1, status = if (guided)
-                        "分析你的棋步 ${index + 1} / ${plies.size}" else "极速复盘 ${index + 1} / ${plies.size}") }
+                val needed = plies.filter { ply -> !guided || game.reviews.find { it.ply == ply }
+                    ?.canReuseDeep(scoringElo(game, ply), stockfishClient.engineName) != true }.toSet()
+                val reused = plies.size - needed.size
+                mutable.update { it.copy(reviewDone = reused) }
+                if (needed.isNotEmpty()) {
+                    persist(game)
+                    val timing = AnalysisTimings.begin(getApplication(), game.id, 0, true, reviewProfile)
+                    timing.put("batch_game", true); timing.put("requested_steps", game.moves.size)
+                    val delivered = mutableSetOf<Int>()
+                    try {
+                        withContext(timing + Dispatchers.Default) {
+                            CloudSearchGate.mutex.withLock {
+                                stockfishClient.reviewGame(game.moves, reviewProfile, needed.toSet(), onAnalysis = onAnalysis@{ ply, analysis ->
+                                    currentCoroutineContext().ensureActive()
+                                    if (token != generation || mutable.value.game.id != game.id) throw CancellationException("棋局已切换")
+                                    if (ply !in needed) return@onAnalysis
+                                    val review = analyzer.fromAnalysis(game.moves.take(ply - 1), game.moves[ply - 1], analysis,
+                                        true, scoringElo(game, ply), reviewProfile)
+                                    val saved = withContext(Dispatchers.IO) { repository.saveReview(game, review, onlyIfUnchanged = guided) }
+                                        ?: throw CancellationException("棋谱已删除")
+                                    currentCoroutineContext().ensureActive()
+                                    if (token != generation || mutable.value.game.id != game.id) throw CancellationException("棋局已切换")
+                                    delivered += ply
+                                    mutable.update { state -> state.copy(game = GameSnapshots.merge(state.game, saved),
+                                        reviewDone = reused + delivered.size, lastAnalysisTimingId = timing.id,
+                                        status = "已保存复评 ${reused + delivered.size} / ${plies.size}") }
+                                })
+                            }
+                            check(delivered.containsAll(needed)) { "服务器未返回全部棋步，已完成的结果已保存" }
+                        }
+                        timing.finish("success")
+                    } catch (e: CancellationException) { timing.finish("cancelled"); throw e }
+                    catch (e: Exception) { timing.finish("failed", e.javaClass.simpleName); throw e }
                 }
                 currentCoroutineContext().ensureActive()
                 if (guided && token == generation && mutable.value.game.id == game.id) {

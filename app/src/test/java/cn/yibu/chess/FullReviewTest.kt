@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import cn.yibu.chess.core.*
 import cn.yibu.chess.data.*
 import cn.yibu.chess.engine.RemoteStockfishClient
+import cn.yibu.chess.engine.BatchApiFixture
 import kotlinx.serialization.json.*
 import okhttp3.mockwebserver.*
 import org.junit.*
@@ -38,19 +39,19 @@ class FullReviewTest {
         PlayPreferences(app).save(PlaySettings(color = ColorPreference.WHITE))
         val histories = CopyOnWriteArrayList<List<String>>()
         val profiles = CopyOnWriteArrayList<String>()
-        val limits = CopyOnWriteArrayList<JsonObject>()
+        val paths = CopyOnWriteArrayList<String>()
         val server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
-                    val payload = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
-                    histories.add(payload.getValue("position").jsonObject.getValue("moves").jsonArray.map { it.jsonPrimitive.content })
+                    val payload = Json.parseToJsonElement(request.body.clone().readUtf8()).jsonObject
+                    paths.add(request.path!!)
                     profiles.add(payload.getValue("profile").jsonPrimitive.content)
-                    limits.add(payload.getValue("limits").jsonObject)
-                    assertEquals(2, payload.getValue("multiPv").jsonPrimitive.int)
-                    if (fail && histories.size == 2) return MockResponse().setResponseCode(500).setBody("test failure")
-                    val move = payload.getValue("playedMove").jsonPrimitive.content
-                    val item = """{"depth":22,"score":{"type":"cp","value":20},"pv":["$move"]}"""
-                    return MockResponse().setBody("""{"best":$item,"played":$item,"comparison":{"canCompare":true,"commonDepth":22},"engine":{"name":"Stockfish","version":"19"}}""")
+                    if (request.path == "/sf/v1/review") return BatchApiFixture.response(request)
+                    val history = payload.getValue("position").jsonObject.getValue("moves").jsonArray.map { it.jsonPrimitive.content }
+                    histories.add(history)
+                    if (fail && history.size == 1) return MockResponse().setResponseCode(500).setBody("test failure")
+                    return BatchApiFixture.response(request)
+
                 }
             }; start()
         }
@@ -69,11 +70,11 @@ class FullReviewTest {
             model.saveSettings(PlaySettings(stockfishToken = "token"))
             model.reviewAll()
             waitFor(model) { !model.state.value.busy }
-            assertEquals(if (fail) 2 else 4, server.requestCount)
-            assertEquals((0 until histories.size).map { moves.take(it) }, histories.toList())
+            assertEquals(5, server.requestCount)
+            assertEquals(1, paths.count { it == "/sf/v1/review" })
+            assertEquals((0 until histories.size).map { moves.take(it) }, histories.sortedBy { it.size })
             assertTrue(profiles.all { it == "lightning" })
-            limits.forEach { assertEquals(22, it.getValue("depth").jsonPrimitive.int); assertEquals(500, it.getValue("maxTimeMs").jsonPrimitive.int) }
-            assertEquals(if (fail) 1 else 4, model.state.value.reviewDone)
+            assertEquals(if (fail) 3 else 4, model.state.value.reviewDone)
             assertEquals("lightning", model.state.value.game.reviews.first().analysisProfile)
             assertEquals(moves, model.state.value.game.moves)
             assertFalse(model.state.value.highlightsOpen)

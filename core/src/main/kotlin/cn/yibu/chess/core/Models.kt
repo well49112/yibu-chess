@@ -193,6 +193,13 @@ data class RemoteMoveAnalysis(
 interface StockfishService {
     suspend fun evaluate(history: List<String>, profile: String = "standard", multiPv: Int = 1): RemoteEvaluation
     suspend fun analyzeMove(history: List<String>, playedMove: String, deep: Boolean, profileOverride: String? = null): RemoteMoveAnalysis
+    /** Each result uses the position before its one-based ply, including the full move history. */
+    suspend fun reviewGame(moves: List<String>, profile: String = "lightning", requestedPlies: Set<Int>? = null,
+        onAnalysis: suspend (ply: Int, analysis: RemoteMoveAnalysis) -> Unit) {
+        // Local engines and test services can keep their single-position implementation.
+        for (index in moves.indices.filter { requestedPlies == null || it + 1 in requestedPlies })
+            onAnalysis(index + 1, analyzeMove(moves.take(index), moves[index], true, profile))
+    }
     fun stop()
 }
 
